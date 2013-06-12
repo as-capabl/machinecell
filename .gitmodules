@@ -1,0 +1,3 @@
+[submodule "machines"]
+	path = machines
+	url = https://github.com/ekmett/machines.git
