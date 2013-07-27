@@ -1,0 +1,14 @@
+knori@zero ~/prog/machinecell/src/Control/Arrow $ git commit -am "cutting in"
+[strict-loop 5370b99] cutting in
+ 1 file changed, 32 insertions(+), 6 deletions(-)
+knori@zero ~/prog/machinecell/src/Control/Arrow $ git tag cutting-in
+knori@zero ~/prog/machinecell/src/Control/Arrow $ git reset --hard HEAD^
+HEAD is now at c16bef1 ArrowLoop: test added
+knori@zero ~/prog/machinecell/src/Control/Arrow $ git reset cutting-in
+Unstaged changes after reset:
+M	src/Control/Arrow/Machine.hs
+knori@zero ~/prog/machinecell/src/Control/Arrow $ git checkout -f
+knori@zero ~/prog/machinecell/src/Control/Arrow $ git commit -am "ArrowLoop: Passed for Stop"
+[strict-loop 84f6499] ArrowLoop: Passed for Stop
+ 1 file changed, 4 insertions(+), 10 deletions(-)
+knori@zero ~/prog/machinecell/src/Control/Arrow $ 

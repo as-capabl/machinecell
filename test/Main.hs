@@ -9,7 +9,7 @@ module
 where
 
 import Control.Arrow.Machine
-import Control.Applicative ((<$>))
+import Control.Applicative ((<$>), (<*>))
 import qualified Data.Machine as Mc
 import qualified Control.Category as Cat
 import Control.Arrow
@@ -26,15 +26,20 @@ import RandomProc
 myProc2 :: ProcessA (Kleisli (State [Int])) (Event Int) (Event Int)
 myProc2 = toProcessA $ Mc.repeatedly core
   where
+    action x = 
+      do 
+        modify (++ [x])
+        return x
     core = 
       do
-        z <- Mc.request (Kleisli $ \x -> do {modify (++ [x]); return x})
+        z <- Mc.request $ Kleisli action
         Mc.yield `mapM` (take z $ repeat z)
 
 
 -- helper
 toN (Event x) = Just x
 toN NoEvent = Nothing
+toN End = Nothing
 en (ex, ey) = Event (toN ex, toN ey)
 de evxy = (fst <$> evxy, snd <$> evxy)
 
@@ -128,6 +133,7 @@ main = hspec $
               en (ex, (ey, ez)) = Event (toN ex, (toN ey, toN ez))
               toN (Event x) = Just x
               toN NoEvent = Nothing
+              toN End = Nothing
               de (Event ((x, y),z))= ((Event x, Event y), Event z)
               de _ = ((NoEvent, NoEvent), NoEvent)
               
@@ -137,6 +143,119 @@ main = hspec $
               x2 = stateProc (arr de >>> arr assoc >>> first f >>> arr en) (l::[((Int, Int), Int)])
             in
               x1 == x2
+
+    describe "ProcessA as ArrowLoop" $
+      do
+        it "can be used with rec statement(pure)" $
+          let
+              a = proc x ->
+                do
+                  rec
+                    l <- returnA -< (:l) $ evMaybe 0 id x
+                  returnA -< Event l
+              result = fst $ stateProc a [2, 5]
+            in
+              take 3 (result!!1) `shouldBe` [5, 5, 5]
+
+        it "can be used with rec statement(macninery)" $
+          let
+              mc = Mc.pass Cat.id
+              a = proc x ->
+                do
+                  rec
+                    l <- toProcessA mc -< (:l') <$> x
+                    l' <- returnA -< evMaybe [] id l
+                  returnA -< l
+              result = fst $ stateProc a [2, 5]
+            in
+              take 3 (result!!1) `shouldBe` [5, 5, 5]
+
+
+    describe "Rules for ArrowLoop" $
+      do
+        let
+            fixcore f y = if y `mod` 5 == 0 then y else y + f (y-1)
+            pure (evx, f) = (f <$> evx, fixcore f)
+            apure = arr pure
+
+        it "temp" $
+          let
+              a2 = mkProc $ PgPush PgNop
+              a3 = mkProc $ PgStop
+              l = [0, 0]
+
+              x1 = stateProc (a2 >>> loop apure >>> a3)
+                   (l::[Int])
+            in
+              x1 `shouldBe` ([], [0])
+
+        it "temp1.5" $
+          let
+              semiPure (Event x, f) = 
+                  (Event $ f x, \y -> if y `mod` 5 == 0 then y else y + f (y-1))
+              semiPure (NoEvent, d) = (NoEvent, undefined)
+              semiPure (End, d) = (End, id)
+              asemiPure = arr semiPure
+
+              a2 = mkProc $ PgDouble PgNop
+              a3 = mkProc $ PgDouble PgNop
+              l = [2]
+
+              x1 = stateProc (loop (first a2 >>> asemiPure) >>> a3)
+                   (l::[Int])
+              x2 = stateProc (a2 >>> loop (asemiPure) >>> a3)
+                   (l::[Int])
+            in
+              x1 `shouldBe` x2
+
+        it "temp2" $
+          let
+              a2 = mkProc $ PgPush (PgDouble PgNop)
+              a3 = mkProc $ PgPush PgStop
+              l = [3, 3]
+
+              x1 = stateProc (loop (first a2 >>> apure) >>> a3)
+                   (l::[Int])
+              x2 = stateProc (a2 >>> {-loop apure >>>-} a3)
+                   (l::[Int])
+            in
+              x2 `shouldBe` ([], [3, 3])
+
+{-
+  -- 途中で止まってしまい通らない
+
+        prop "left tightening" $ \(l, fx, fy, fz) ->
+          let
+              a1 = mkProc fx
+              a2 = mkProc fy
+              a3 = mkProc fz
+
+              x1 = stateProc (a1 >>> loop (first a2 >>> apure) >>> a3)
+                   (l::[Int])
+              x2 = stateProc (a1 >>> a2 >>> loop apure >>> a3)
+                   (l::[Int])
+            in
+              x1 == x2
+
+        prop "right tightening" $ \(l, fx, fy, fz) ->
+          let
+              a1 = mkProc fx
+              a2 = mkProc fy
+              a3 = mkProc fz
+
+              pure (Event x, f) = 
+                  (Event $ f x, \y -> if y `mod` 5 == 0 then y else y + f (y-1))
+              pure (NoEvent, d) = (NoEvent, id)
+              apure = arr pure
+
+              x1 = stateProc (a1 >>> loop (apure >>> first a2) >>> a3)
+                   (l::[Int])
+              x2 = stateProc (a1 >>> loop apure >>> a2 >>> a3)
+                   (l::[Int])
+            in
+              x1 == x2
+-}
+
 {-
     describe "ProcessA as ArrowChoice" $
       do        

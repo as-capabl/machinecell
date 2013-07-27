@@ -80,6 +80,7 @@ mkProc (PgPop (fx, fy) fz) =
     head_ [] = 0
     sp (Event (x,y)) = (Event x, Event y)
     sp NoEvent = (NoEvent, NoEvent)
+    sp End = (End, End)
 
 mkProc (PgOdd next) = toProcessA mc >>> mkProc next
   where
