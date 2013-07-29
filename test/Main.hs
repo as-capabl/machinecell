@@ -8,14 +8,17 @@ module
     Main
 where
 
+import Data.Maybe (fromMaybe)
 import Control.Arrow.Machine
 import Control.Applicative ((<$>), (<*>))
 import qualified Data.Machine as Mc
+import Data.Machine ((<~))
 import qualified Control.Category as Cat
 import Control.Arrow
 import Control.Monad.State
 import Control.Monad
 import Control.Monad.Trans
+import Control.Monad.Identity (Identity)
 import Debug.Trace
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
@@ -47,6 +50,31 @@ de evxy = (fst <$> evxy, snd <$> evxy)
 
 main = hspec $
   do
+    describe "ProcessA" $
+      do
+        it "is wrapper of Ekmett's Machine." $
+          do
+            let
+              plan = 
+                do
+                  x <- Mc.await
+                  Mc.yield x
+                  Mc.yield (x + 1)
+              process = Mc.repeatedly plan
+
+            let
+              l = [1,2,4,8,10]
+
+            let
+              -- Machineによる書き方
+              result = fromMaybe [] $ 
+                Mc.run (Mc.supply l process <~ Mc.pass Nothing)
+
+              -- ProcessAによる書き方
+              resultA = runProcessA (toProcessA process) l
+
+            result `shouldBe` resultA
+
     describe "ProcessA as Category" $
       do        
         prop "has asocciative composition" $ \f g h l ->
@@ -151,7 +179,7 @@ main = hspec $
               a = proc x ->
                 do
                   rec
-                    l <- returnA -< (:l) $ evMaybe 0 id x
+                    l <- returnA -< (:l) $ fromEvent 0 x
                   returnA -< Event l
               result = fst $ stateProc a [2, 5]
             in
@@ -164,7 +192,7 @@ main = hspec $
                 do
                   rec
                     l <- toProcessA mc -< (:l') <$> x
-                    l' <- returnA -< evMaybe [] id l
+                    l' <- returnA -< fromEvent [] l
                   returnA -< l
               result = fst $ stateProc a [2, 5]
             in
@@ -243,10 +271,6 @@ main = hspec $
               a2 = mkProc fy
               a3 = mkProc fz
 
-              pure (Event x, f) = 
-                  (Event $ f x, \y -> if y `mod` 5 == 0 then y else y + f (y-1))
-              pure (NoEvent, d) = (NoEvent, id)
-              apure = arr pure
 
               x1 = stateProc (a1 >>> loop (apure >>> first a2) >>> a3)
                    (l::[Int])

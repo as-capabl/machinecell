@@ -10,7 +10,8 @@ module
         Event (..), 
         hEv, 
         hEv', 
-        evMaybe
+        evMaybe,
+        fromEvent
       )
 where
 
@@ -59,3 +60,17 @@ evMaybe :: b -> (a->b) -> Event a -> b
 evMaybe _ f (Event x) = f x
 evMaybe r _ NoEvent = r
 evMaybe r _ End = r
+
+fromEvent :: a -> Event a -> a
+fromEvent x = evMaybe x id
+
+-- TODO: テスト
+condEvent :: Bool -> Event a -> Event a
+condEvent _ End = End
+condEvent True ev = ev
+condEvent False ev = NoEvent
+
+-- TODO: テスト
+filterEvent :: (a -> Bool) -> Event a -> Event a
+filterEvent cond ev@(Event x) = condEvent (cond x) ev
+filterEvent _ ev = ev

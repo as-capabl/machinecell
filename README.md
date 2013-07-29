@@ -1,7 +1,7 @@
 machinecell
 ===========
 
-Arrow combinations for Machine
+Provides arrow combinations for Machines.
 
 Running
 ---------------
@@ -9,3 +9,5 @@ Running
     git submodule update
     cd test
     make
+
+See example of test/Main.hs
