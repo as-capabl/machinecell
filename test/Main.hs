@@ -66,11 +66,11 @@ main = hspec $
               l = [1,2,4,8,10]
 
             let
-              -- Machineによる書き方
+              -- Machineによる書き方 (runがMonadPlusを要求するのでMaybe)
               result = fromMaybe [] $ 
-                Mc.run (Mc.supply l process <~ Mc.pass Nothing)
+                Mc.run (Mc.supply l process <~ mzero)
 
-              -- ProcessAによる書き方
+              -- ProcessAによる等価な書き方
               resultA = runProcessA (toProcessA process) l
 
             result `shouldBe` resultA
