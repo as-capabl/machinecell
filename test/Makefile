@@ -7,6 +7,7 @@ SOURCES=../src/Control/Arrow/Machine/Utils.hs \
 ../src/Control/Arrow/Machine/Detail.hs \
 ../src/Control/Arrow/Machine/Types.hs \
 ../src/Control/Arrow/Machine/Event.hs \
+../src/Control/Arrow/Machine/Plan.hs \
 ../src/Control/Arrow/Machine.hs 
 
 

@@ -18,7 +18,7 @@ import Control.Arrow
 import Control.Monad.State
 import Control.Monad
 import Control.Monad.Trans
-import Control.Monad.Identity (Identity)
+import Control.Monad.Identity (Identity, runIdentity)
 import Debug.Trace
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
@@ -290,3 +290,34 @@ main = hspec $
                 x <- (|hEv (\x -> returnA -< ) ()
                 if 
 -}
+
+    describe "Plan" $
+      do
+        let
+            pl = do
+              x <- await
+              yield x
+              yield (x+1)
+              x <- await
+              yield x
+              yield (x+1)
+            l = [2, 5, 10, 20, 100]
+
+        it "can be constructed into ProcessA" $
+          do
+            let 
+                result = runIdentity $ 
+                         runKleisli
+                           (runProcessA (construct pl))
+                           l
+            result `shouldBe` [2, 3, 5, 6]
+
+        it "can be repeatedly constructed into ProcessA" $
+          do
+            let 
+                result = runIdentity $ 
+                         runKleisli
+                           (runProcessA (repeatedly pl))
+                           l
+            result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
+            
