@@ -46,9 +46,12 @@ toN End = Nothing
 en (ex, ey) = Event (toN ex, toN ey)
 de evxy = (fst <$> evxy, snd <$> evxy)
 
+runKI a x = runIdentity (runKleisli a x)
 
 
-main = hspec $
+main = hspec $ do {basics; rules; plans}
+
+basics =
   do
     describe "ProcessA" $
       do
@@ -75,6 +78,8 @@ main = hspec $
 
             result `shouldBe` resultA
 
+rules =
+  do
     describe "ProcessA as Category" $
       do        
         prop "has asocciative composition" $ \f g h l ->
@@ -291,33 +296,32 @@ main = hspec $
                 if 
 -}
 
-    describe "Plan" $
-      do
-        let
-            pl = do
+plans = describe "Plan" $
+    do
+      let
+          pl = 
+            do
               x <- await
               yield x
               yield (x+1)
               x <- await
               yield x
               yield (x+1)
-            l = [2, 5, 10, 20, 100]
+          l = [2, 5, 10, 20, 100]
 
-        it "can be constructed into ProcessA" $
-          do
-            let 
-                result = runIdentity $ 
-                         runKleisli
-                           (runProcessA (construct pl))
-                           l
-            result `shouldBe` [2, 3, 5, 6]
+      it "can be constructed into ProcessA" $
+        do
+          let 
+              result = runKI
+                         (runProcessA (construct pl))
+                         l
+          result `shouldBe` [2, 3, 5, 6]
 
-        it "can be repeatedly constructed into ProcessA" $
-          do
-            let 
-                result = runIdentity $ 
-                         runKleisli
-                           (runProcessA (repeatedly pl))
-                           l
-            result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
+      it "can be repeatedly constructed into ProcessA" $
+        do
+          let
+              result = runKI
+                         (runProcessA (repeatedly pl))
+                         l
+          result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
             
