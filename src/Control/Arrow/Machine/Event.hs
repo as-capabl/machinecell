@@ -11,7 +11,9 @@ module
         hEv, 
         hEv', 
         evMaybe,
-        fromEvent
+        fromEvent,
+        split2,
+        join2
       )
 where
 
@@ -22,7 +24,7 @@ import Control.Arrow
 import Control.Applicative (Applicative, pure, (<*>))
 
 
-data Event a = Event a | NoEvent | End
+data Event a = Event a | NoEvent | End deriving (Eq, Show)
 
 hEv :: ArrowApply a => a (e,b) c -> a e c -> a (e, Event b) c
 hEv f1 f2 = proc (e, ev) ->
@@ -74,3 +76,15 @@ condEvent False ev = NoEvent
 filterEvent :: (a -> Bool) -> Event a -> Event a
 filterEvent cond ev@(Event x) = condEvent (cond x) ev
 filterEvent _ ev = ev
+
+-- TODO: テスト
+split2 :: Event (Event a, Event b) -> (Event a, Event b)
+split2 (Event tp) = tp
+split2 NoEvent = (NoEvent, NoEvent)
+split2 End = (End, End)
+
+join2 :: (Event a, Event b) -> Event (Event a, Event b)
+join2 (End, _) = End
+join2 (_, End) = End
+join2 (NoEvent, NoEvent) = NoEvent
+join2 tp = Event tp

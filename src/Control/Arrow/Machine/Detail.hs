@@ -9,7 +9,8 @@ module
       (
          ProcessA_(..), 
          runProcessA_, 
-         concatenate
+         concatenate,
+         feedTo
       )
 where
 
@@ -257,30 +258,48 @@ yieldTo2nd :: ArrowApply a => ((Event q, c) -> Event r)
            -> a (Event q, c) 
                 (CM a c p q s -> CM a c p q s, Mc.Machine (a r) s)
 
-yieldTo2nd fmid mc2@(Mc.Await gc g gf) = 
-    traceMc "2:await" $ proc ex@(_, c) ->
+yieldTo2nd fmid mc2 = proc evqc -> 
+  do 
+    let
+        (evq, r) = evqc
+        fmid' evx = fmid (evx, r)
+    (ys, nextMc) <- feedTo fmid' mc2 -<< evq
+    returnA -< (listToMc evq ys, nextMc)
+  where
+    listToMc r (x:xs) = Mc.Yield (r, x) . listToMc r xs
+    listToMc r [] = id
+
+
+
+feedTo :: ArrowApply a => (Event q -> Event r)
+           -> Mc.Machine (a r) s
+           -> a (Event q) 
+                ([Event s], Mc.Machine (a r) s)
+
+feedTo fmid mc2@(Mc.Await gc g gf) = 
+    traceMc "2:await" $ proc evx ->
       do
         (|
           hEv'
             (\x -> 
               do 
                 y <- g -< x
-                sweep2nd fmid (gc y)-<< (ex, (NoEvent, c)))
-            (sweep2nd fmid mc2 -<< (ex, (NoEvent, c)))
-            (returnA -< (Mc.Yield (End, End), gf))
+                sweep2nd fmid (gc y)-<< (evx, NoEvent))
+            (sweep2nd fmid mc2 -<< (evx, NoEvent))
+            (returnA -< ([End], gf))
           |) 
-            (fmid ex)
+            (fmid evx)
 
         -- 最初の一回だけev1はev2でない値を持ち得る
         
 
-yieldTo2nd fmid Mc.Stop = 
-    traceMc "2:stop" $ proc (evx, c) ->
-      returnA -< (Mc.Yield (evx, End), Mc.Stop)
+feedTo fmid Mc.Stop = 
+    traceMc "2:stop" $ proc evx ->
+      returnA -< ([End], Mc.Stop)
 --      returnA -< (id, Mc.Stop)
       
 
-yieldTo2nd fmid (Mc.Yield _ _) = undefined
+feedTo fmid (Mc.Yield _ _) = undefined
 
 sweep2nd fmid (Mc.Yield y gc) = 
     traceMc "2:yield" $ proc (evs1, evs2) ->
@@ -289,8 +308,8 @@ sweep2nd fmid (Mc.Yield y gc) =
         let ev2 = fmid evs2
 
         (yields, mc2) <- sweep2nd fmid gc -< (evs2, evs2)
-        returnA -< (Mc.Yield (fst evs1, Event y) . yields, mc2)
+        returnA -< ([Event y] ++ yields, mc2)
 
 sweep2nd fmid mc2 =
     proc _ ->
-        returnA -< (id, mc2)
+        returnA -< ([], mc2)

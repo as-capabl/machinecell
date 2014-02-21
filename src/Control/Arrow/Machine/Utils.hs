@@ -11,7 +11,7 @@ where
 import qualified Data.Machine as Mc
 import Data.Machine ((~>))
 import qualified Control.Category as Cat
-import Control.Monad (liftM)
+import Control.Monad (liftM, mzero, forever)
 import Control.Arrow
 import Control.Applicative
 import Control.Monad.Trans
@@ -21,6 +21,7 @@ import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Detail
 
+import qualified Control.Arrow.Machine.Plan as Pl
 
 delay :: ArrowApply a => ProcessA a (Event b) (Event b)
 delay = toProcessA $ Mc.construct $
@@ -38,7 +39,7 @@ hold :: ArrowApply a => b -> ProcessA a (Event b) b
 hold init = ProcessA $ holdImpl init
 
 
-holdImpl :: ArrowApply a => b -> ProcessA_ a (b, d) t -> ProcessA_ a (Event b, d) t
+holdImpl :: ArrowApply a => b -> ProcessA_ a (Maybe b, d) t -> ProcessA_ a (Maybe (Event b), d) t
 holdImpl init (ProcessA_ pre post mc) = 
         ProcessA_ 
            (pre' pre) 
@@ -47,7 +48,12 @@ holdImpl init (ProcessA_ pre post mc) =
   where
     -- pre' pre arg = (pre <$> ((,) <$> fst arg <*> Event (snd arg)) , ())
     pre' pre arg = 
-        (Event arg, snd $ pre (evMaybe init id $ fst arg, snd arg))
+        case arg 
+           of
+             (Just x, y) ->
+                 (Event (x, y), snd $ pre (Just (evMaybe init id x), y))
+             (Nothing, y) ->
+                 (NoEvent, snd $ pre (Nothing, y))
 
     post' post (arg, r) = 
         evMaybe (post (NoEvent, r)) post arg -- 極めて怪しい
@@ -60,7 +66,7 @@ holdImpl init (ProcessA_ pre post mc) =
           (proc (evx, d) ->
             do
               x <- arr (evMaybe held id) -< evx
-              (evp, r) <- arr pre -< (x, d)
+              (evp, r) <- arr pre -< (Just x, d)
               (| hEv'
                   (\p -> do {y <- f -< p; returnA -< mc' pre x r (fc y)})
                   (returnA -< mc' pre held r0 mc)
@@ -70,6 +76,63 @@ holdImpl init (ProcessA_ pre post mc) =
           (mc' pre held r0 ff)
     mc' pre held r (Mc.Yield q fc) = 
         Mc.Yield (Event q, r) (mc' pre held r fc)
+
+
+once :: ArrowApply a =>
+        a b c ->
+        ProcessA a (Event b) (Maybe c)
+once action = toProcessA go >>> hold Nothing
+  where
+    go = Mc.construct $
+      do
+        ret <- Mc.request action
+        Mc.yield $ Just ret
+        forever $ Mc.request (arr id)
+
+
+anyTime :: ArrowApply a =>
+        a b c ->
+        ProcessA a (Event b) (Event c)
+anyTime action = toProcessA go
+  where
+    go = Mc.repeatedly $
+      do
+        ret <- Mc.request action
+        Mc.yield ret
+
+
+accumulate :: (ArrowApply a, ArrowLoop a) => 
+              (c->b->c) -> c -> ProcessA a (Event b) c
+accumulate f init = proc evx -> 
+  do
+    rec
+      current <- hold init <<< delay -< next
+      next <- returnA -< f current `fmap` evx
+    returnA -< current
+
+type Running a b c = ProcessA_ a b c
+
+startRun :: Arrow a => 
+            ProcessA a (Event b) (Event c) -> 
+            ProcessA_ a (Event b) (Event c)
+startRun = resolveCPS
+
+stepRun :: ArrowApply a => 
+           ProcessA_ a (Event b) (Event c) -> 
+           a b ([c], ProcessA_ a (Event b) (Event c))
+stepRun (ProcessA_ pre post mc) = proc x ->
+  do
+    let
+        (evp, r) = pre (Event x)
+    (ret, mc') <- feedTo id mc -< evp
+    let
+        evcs = map (\q -> post (q, r)) ret
+        cs = evcs >>= evMaybe mzero return
+    returnA -< (cs, ProcessA_ pre post mc')
+
+--isStop :: ProcessA_ a b c -> 
+isStop = undefined
+
 {-
         Mc.construct (holder pre x) ~> Mc.fit first mc
     holder pre xprev = 

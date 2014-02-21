@@ -49,7 +49,7 @@ de evxy = (fst <$> evxy, snd <$> evxy)
 runKI a x = runIdentity (runKleisli a x)
 
 
-main = hspec $ do {basics; rules; plans}
+main = hspec $ do {basics; rules; loops; choice; plans; execution}
 
 basics =
   do
@@ -177,14 +177,15 @@ rules =
             in
               x1 == x2
 
+loops =
+  do
     describe "ProcessA as ArrowLoop" $
       do
         it "can be used with rec statement(pure)" $
           let
               a = proc x ->
                 do
-                  rec
-                    l <- returnA -< (:l) $ fromEvent 0 x
+                  rec l <- returnA -< (:l) $ fromEvent 0 x
                   returnA -< Event l
               result = fst $ stateProc a [2, 5]
             in
@@ -195,9 +196,8 @@ rules =
               mc = Mc.pass Cat.id
               a = proc x ->
                 do
-                  rec
-                    l <- toProcessA mc -< (:l') <$> x
-                    l' <- returnA -< fromEvent [] l
+                  rec l <- toProcessA mc -< (:l') <$> x
+                      l' <- returnA -< fromEvent [] l
                   returnA -< l
               result = fst $ stateProc a [2, 5]
             in
@@ -285,6 +285,39 @@ rules =
               x1 == x2
 -}
 
+choice =
+  do
+    describe "ProcessA as ArrowChoice" $
+      do
+        it "temp1" $
+         do
+           let
+                ag = Cat.id::MyProcT (Event Int) (Event Int)
+                aj1 = arr Right
+                aj2 = arr $ either id id
+                l = [0]
+                r2 = stateProc 
+                       (aj1 >>> left ag >>> aj2) 
+                       l
+           r2 `shouldBe` ([0], [])
+
+        prop "left (f >>> g) = left f >>> left g" $ \e f g h j1 l ->
+            let
+                ae = mkProc e
+                af = mkProc f
+                ag = mkProc g
+                ah = mkProc h
+                aj1 = arr $ if j1 then Left else Right
+                aj2 = arr $ either id id
+                r1 = stateProc 
+                       (ae >>> aj1 >>> left (af >>> ag) >>> aj2 >>> ah) 
+                       l
+                r2 = stateProc 
+                       (ae >>> aj1 >>> left af >>> left ag >>> aj2 >>> ah) 
+                       l
+              in
+                r1 == r2
+
 {-
     describe "ProcessA as ArrowChoice" $
       do        
@@ -297,6 +330,34 @@ rules =
 -}
 
 plans = describe "Plan" $
+  do
+    let pl = 
+          do
+            x <- await
+            yield x
+            yield (x+1)
+            x <- await
+            yield x
+            yield (x+1)
+        l = [2, 5, 10, 20, 100]
+
+    it "can be constructed into ProcessA" $
+      do
+        let 
+            result = runKI
+                       (runProcessA (construct pl))
+                       l
+        result `shouldBe` [2, 3, 5, 6]
+
+    it "can be repeatedly constructed into ProcessA" $
+      do
+        let
+            result = runKI
+                       (runProcessA (repeatedly pl))
+                       l
+        result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
+            
+execution = describe "Execution of ProcessA" $
     do
       let
           pl = 
@@ -307,21 +368,19 @@ plans = describe "Plan" $
               x <- await
               yield x
               yield (x+1)
-          l = [2, 5, 10, 20, 100]
+              yield (x+5)
+          init = startRun $ construct pl
 
-      it "can be constructed into ProcessA" $
-        do
-          let 
-              result = runKI
-                         (runProcessA (construct pl))
-                         l
-          result `shouldBe` [2, 3, 5, 6]
-
-      it "can be repeatedly constructed into ProcessA" $
+      it "supports step execution" $
         do
           let
-              result = runKI
-                         (runProcessA (repeatedly pl))
-                         l
-          result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
-            
+              (x, now) = runKI (stepRun init) 1
+          x `shouldBe` [1, 2]
+
+          let
+              (x, now2) = runKI (stepRun now) 1
+          x `shouldBe` [1, 2, 6]
+
+          let
+              (x, _) = runKI (stepRun now2) 1
+          x `shouldBe` ([]::[Int])

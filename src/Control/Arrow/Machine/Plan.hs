@@ -79,3 +79,5 @@ repeatedly pl = construct $ repeatIt pl pl
 repeatIt orig (F.Pure x) = repeatIt orig orig
 
 repeatIt orig (F.Free pf) = F.Free $ fmap (repeatIt orig) pf
+
+

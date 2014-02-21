@@ -15,6 +15,7 @@ import Control.Arrow
 import Control.Applicative
 import Control.Monad.Trans
 import Debug.Trace
+import Data.Maybe
 
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Detail
@@ -24,13 +25,14 @@ traceMc = const id
 
 
 data ProcessA a b c =
-               ProcessA (forall t d. ProcessA_ a (c, d) t -> ProcessA_ a (b, d) t)
+               ProcessA (forall t d. ProcessA_ a (Maybe c, d) t -> ProcessA_ a (Maybe b, d) t)
 
 toProcessA :: ArrowApply a => Mc.Machine (a b) c -> ProcessA a (Event b) (Event c)
 toProcessA mc = ProcessA $ \succ -> concatenate (ProcessA_ pre post mc) succ
   where
-    pre = id
-    post = id
+    pre (Just x, y) = (x, y)
+    pre (Nothing, y) = (NoEvent, y)
+    post (x, y) = (Just x, y)
 
 {-
 instance 
@@ -66,12 +68,14 @@ runProcessA pa =
 resolveCPS :: Arrow a => ProcessA a (Event b) (Event c) -> ProcessA_ a (Event b) (Event c)
 resolveCPS (ProcessA cps) = dropIt $ cps $ ProcessA_ pre1 post1 mc1
   where
-    pre1 = id
+    pre1 (Just x, y) = (x, y)
+    pre1 (Nothing, y) = (NoEvent, y)
     post1 = fst
     mc1 = Mc.pass Cat.id
 
     dropIt (ProcessA_ pre post mc) = ProcessA_ (pre . pad) post mc
-    pad x = (x, error "This may not be touched.")
+    pad x = (Just x, error "This may not be touched.")
+
 
 
 {-
@@ -107,33 +111,89 @@ instance
 instance 
     ArrowApply a => Arrow (ProcessA a)
   where
-    arr f = ProcessA $ arrImpl f
+    arr f = ProcessA $ arrImpl (fmap f)
     first (ProcessA f) = ProcessA $ \succ -> assocA $ f $ unassocA succ
       where
         assocA (ProcessA_ pre post mc) = ProcessA_ (pre . assoc) post mc
         unassocA (ProcessA_ pre post mc) = ProcessA_ (pre . unassoc) post mc
-        assoc ((x, y), z) = (x, (y, z))
-        unassoc (x, (y, z)) = ((x, y), z)
+
+        assoc (Just (x, y), z) = (Just x, (Just y, z))
+        assoc (Nothing, z) = (Nothing, (Nothing, z))
+
+        unassoc (Just x, (Just y, z)) = (Just (x, y), z)
+        unassoc (_, (_, z)) = (Nothing, z)
 
 
 arrImpl :: (b->c) -> ProcessA_ a (c,d) t0 -> ProcessA_ a (b,d) t0
 arrImpl f (ProcessA_ pre post mc) = ProcessA_ (pre . first f) post mc
 
 
+
+instance
+    ArrowApply a => ArrowChoice (ProcessA a)
+  where
+    left (ProcessA f) = ProcessA $ \cont -> resolveA (f (unresolveA cont))
+      where
+        resolveA (ProcessA_ pre post mc) = 
+            ProcessA_ (resolve pre) post mc
+        unresolveA (ProcessA_ pre post mc) = 
+            ProcessA_ (unresolve pre) post mc
+
+        resolve pre (Just (Left c), d) = pre (Just c, Left d)
+        resolve pre (Nothing, d) = pre (Nothing, Left d)
+        resolve pre (Just (Right x), d) = pre (Nothing, Right (x, d))
+
+        unresolve pre (Just x, Left d) = pre (Just (Left x), d)
+        unresolve pre (Nothing, Left d) = pre (Nothing, d)
+        unresolve pre (_, Right (x, d)) = pre (Just (Right x), d)
+
+
+{-
+        resolve pre (Just (Left c), d) = 
+            let (evp, r) = pre (Just c, (d))
+              in
+                (evp, Left r)
+        resolve pre (Just (Right x), d) = 
+            let (evp, r) = pre (Nothing, d))
+              in
+                (evp, Right (r, x))
+        resolve _ (Nothing, d) = 
+            let (evp, r) = pre (Nothing, d))
+              in
+                (evp, Left r)
+
+        unresolve post (evq, Left r) =
+            let fin = post (evq, r)
+              in
+                (
+-}
 {-
 instance
     ArrowApply a => ArrowChoice (ProcessA a)
   where
-    left (ProcessA f) = ProcessA $ \succ -> assocA $ f $ unassocA succ
+    left (ProcessA f) = eith >>> ProcessA $ \succ -> f $ unassocA succ
       where
-        assocA (ProcessA_ pre post mc) = ProcessA_ (assoc pre) post mc
+        eith = undefined
+
+        assocA (ProcessA_ pre post mc) = ProcessA_ (assoc pre) (assoc2 post) mc
         unassocA (ProcessA_ pre post mc) = ProcessA_ (pre . unassoc) post mc
-        assoc pre (Left x, z) = 
-            case pre x of (evx, c) -> (evx, (Left c, z))
-        assoc _ (Right y, z) = (NoEvent, (Right y, z))
-        unassoc (_, (Event y, z)) = (Right y, z)
-        unassoc (x', (NoEvent, z)) = (Left x' , z)
+
+
+        assoc pre (Just (Left x), z) = 
+            case pre (Just x, z) of (evp, c) -> (evp, Left (c, z))
+        assoc pre (Just (Right d), z) = 
+            case pre (Nothing, z) of (evp, c) -> (evp, Right (c, d, z))
+
+
+--        assoc2 post (evq, Left (c, z)) = (Just $ post (evq, c), Left z)
+--        assoc2 post (evq, Right (c, d, z)) = (Nothing, Right (d, z))
+        assoc2 = id
+
+        unassoc (Just x', Left z) = (Just (Left x') , z)
+        unassoc (_, Right (d, z)) = (Just (Right d), z)
 -}
+
+
 
 instance
     (ArrowApply a, ArrowLoop a) => ArrowLoop (ProcessA a)
@@ -145,21 +205,26 @@ instance
       where
         -- assocA (ProcessA_ pre post mc) = ProcessA_ (pre . assoc) post mc
         -- unassocA (ProcessA_ pre post mc) = ProcessA_ (pre . unassoc) post mc
-        first_ :: ProcessA_ a (c, p) t-> 
-                 ProcessA_ a ((c, d), p) (t, d)
+        first_ :: ProcessA_ a (Maybe c, p) t-> 
+                 ProcessA_ a (Maybe (c, d), p) (t, d)
         first_ (ProcessA_ pre post mc) = 
             ProcessA_ (assoca pre) (unassoca post) mc
-        assoca pre ((x, d), p) = let (ev, r) = pre (x, p) in (ev, (r, d))
-        unassoca post (evx, (r, d)) = 
+        assoca pre (Just (x, d), p) = 
+            let (ev, r) = pre (Just x, p) in (ev, (r, Just d))
+        assoca pre (Nothing, p) = 
+            let (ev, r) = pre (Nothing, p) in (ev, (r, Nothing))
+        unassoca post (evx, (r, mayD)) = 
             let
                 t = post (evx, r)
               in
-                (t, d)
+                (t, fromJust mayD)
 
-        swap_ :: ProcessA_ a ((b, d), p) (t, d)-> 
-                 ProcessA_ a ((b, p), d) (t, d)
+
+        swap_ :: ProcessA_ a (Maybe (b, d), p) (t, d)-> 
+                 ProcessA_ a ((Maybe b, p), d) (t, d)
         swap_ (ProcessA_ pre post mc) = ProcessA_ (pre . sw) post mc
-        sw ((b, d), p) = ((b, p), d)
+        sw ((Just b, d), p) = (Just (b, p), d)
+        sw ((Nothing, d), p) = (Nothing, d)
         -- unassoc (x, (y, z)) = ((x, y), z)
 
 loopImpl ::
