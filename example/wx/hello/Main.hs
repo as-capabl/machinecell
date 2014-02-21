@@ -24,14 +24,10 @@ import qualified Graphics.UI.WXCore as WxC
 import WxHandler
 
 type MainArrow = Kleisli IO
-mainArrow = Kleisli
 runMainArrow = runKleisli
 instance ArrowIO MainArrow
   where
     arrIO = Kleisli
-
-asMainArrow :: MainArrow (IO a) a
-asMainArrow = proc io -> Kleisli (const io) -<< ()
 
 
 data MyForm a b = MyForm { 
