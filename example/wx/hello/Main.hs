@@ -43,7 +43,7 @@ machine = proc world ->
     case form 
       of
         Nothing -> 
-            returnA -< P.NoEvent
+            P.pass -< P.NoEvent
 
         Just (MyForm f btnDlg btnQuit) ->
           do    
@@ -54,7 +54,7 @@ machine = proc world ->
             quitMsg <- onCommand -< (world, btnQuit)
             P.anyTime (arrIO Wx.close) -< const f `fmap` quitMsg
 
-            returnA -< P.NoEvent
+            P.pass -< P.NoEvent
 
   where
     setup = 

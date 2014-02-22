@@ -60,9 +60,15 @@ listenID :: ArrowApply a =>
                  (P.Event EventArg)
 listenID = proc (World _ etp, myID) ->
   do
-    isEq <- P.filter (arr id) -< (\(eid, _) -> eid == myID) <$> etp
-    returnA -< (\(_, ea) _ -> ea) <$> etp <*> isEq
+     P.pass -< go myID etp
 
+  where
+    go myID (P.Event (curID, ea)) = 
+        if curID == myID 
+          then P.Event ea 
+          else P.NoEvent
+    go _ P.NoEvent = P.NoEvent
+    go _ P.End = P.End
 
 
 onInit :: (ArrowApply a) => 
@@ -70,7 +76,7 @@ onInit :: (ArrowApply a) =>
 onInit = proc world -> 
   do
     ea <- listenID -< (world,initialID)
-    returnA -< const () `fmap` ea
+    P.pass -< const () `fmap` ea
 
 
 
@@ -88,7 +94,7 @@ listen reg getter = proc (world@(World env etp), ia) ->
     case mMyID
       of
         Nothing -> 
-            returnA -< P.NoEvent
+            P.pass -< P.NoEvent
 
         Just myID ->
           do

@@ -8,6 +8,8 @@ module
     Control.Arrow.Machine.Utils
 where
 
+import Prelude hiding (filter)
+
 import qualified Data.Machine as Mc
 import Data.Machine ((~>))
 import qualified Control.Category as Cat
@@ -111,6 +113,12 @@ filter cond = toProcessA $ Mc.repeatedly $
         b <- cond -< x
         returnA -< if b then Just x else Nothing
     maybe (return ()) Mc.yield mayReturn
+
+
+pass :: ArrowApply a =>
+          ProcessA a (Event b) (Event b)
+pass = filter (arr (const True))
+
 
 accumulate :: (ArrowApply a, ArrowLoop a) => 
               (c->b->c) -> c -> ProcessA a (Event b) c
