@@ -101,6 +101,17 @@ anyTime action = toProcessA go
         Mc.yield ret
 
 
+filter :: ArrowApply a =>
+          a b Bool ->
+          ProcessA a (Event b) (Event b)
+filter cond = toProcessA $ Mc.repeatedly $
+  do
+    mayReturn <- Mc.request $ proc x ->
+      do
+        b <- cond -< x
+        returnA -< if b then Just x else Nothing
+    maybe (return ()) Mc.yield mayReturn
+
 accumulate :: (ArrowApply a, ArrowLoop a) => 
               (c->b->c) -> c -> ProcessA a (Event b) c
 accumulate f init = proc evx -> 

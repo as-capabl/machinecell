@@ -24,13 +24,18 @@ import Graphics.UI.WX (Prop ((:=)))
 import qualified Graphics.UI.WXCore as WxC
 
 
+-- イベントID
+newtype EventID = EventID Int deriving (Eq, Show)
+
+initialID = EventID 0
+inclID (EventID n) = EventID (n+1)
+newID env =  Wx.varUpdate (envGetIDPool env) inclID
 
 
--- イベント処理
+-- 実行環境
 type MainState a = P.Running a
                     (P.Event (EventID, EventArg)) (P.Event ())
 
-newtype EventID = EventID Int deriving (Eq, Show)
 data EventEnv a = EventEnv {
       envGetIDPool :: Wx.Var EventID,
       envGetState :: Wx.Var (MainState a),
@@ -46,19 +51,58 @@ data World a = World {
       worldGetEvent :: P.Event (EventID, EventArg)
 }
 
-eventHandler env eid arg =
+
+
+-- イベントハンドリング
+listenID :: ArrowApply a =>
+            P.ProcessA a
+                 (World a, EventID)
+                 (P.Event EventArg)
+listenID = proc (World _ etp, myID) ->
+  do
+    isEq <- P.filter (arr id) -< (\(eid, _) -> eid == myID) <$> etp
+    returnA -< (\(_, ea) _ -> ea) <$> etp <*> isEq
+
+
+
+onInit :: (ArrowApply a) => 
+         P.ProcessA a (World a) (P.Event ())
+onInit = proc world -> 
+  do
+    ea <- listenID -< (world,initialID)
+    returnA -< const () `fmap` ea
+
+
+
+listen :: (ArrowIO a, ArrowApply a) =>
+          a (EventArg -> IO (), initArg) () ->
+          a EventArg ev ->
+              P.ProcessA a
+                   (World a, initArg)
+                   (P.Event ev)
+listen reg getter = proc (world@(World env etp), ia) ->
+  do
+    initMsg <- onInit -< world
+    mMyID <- P.once (arrIO newID) -< fmap (const env) initMsg
+
+    case mMyID
+      of
+        Nothing -> 
+            returnA -< P.NoEvent
+
+        Just myID ->
+          do
+            P.once reg -< fmap (const (handleProc env myID, ia)) initMsg
+
+            ea <- listenID -< (world, myID)
+            P.anyTime getter -< ea
+
+
+handleProc env eid arg =
   do
     stH <- Wx.varGet $ envGetState env
     (_, stH') <- envGetRun env (P.stepRun stH) (eid, arg)
     envGetState env `Wx.varSet` stH'
-
-
-
-initialID = EventID 0
-inclID (EventID n) = EventID (n+1)
-newID env =  Wx.varUpdate (envGetIDPool env) inclID
-
-
 
 
 wxReactimate :: (ArrowIO a, ArrowApply a) =>
@@ -84,52 +128,10 @@ wxReactimate run init = Wx.start go
             let st = P.startRun init'
 
 
-        eventHandler env initialID EventNoArg
+        handleProc env initialID EventNoArg
 
 
-
-
-listen :: (ArrowIO a, ArrowApply a) =>
-          a (EventArg -> IO (), initArg) () ->
-          a EventArg ev ->
-              P.ProcessA a
-                   (World a, initArg)
-                   (P.Event ev)
-listen reg getter = proc (World env etp, ia) ->
-  do
-    P.toProcessA (Mc.construct go) -< 
-       retuple <$> etp <*> P.Event env <*>P.Event ia
-  where
-    retuple (eid, ea) env ia = 
-        (env, eid, ea, ia)
-
-    go =
-      do
-        myID <- Mc.request $ proc (env, curID, _, ia) ->
-          do
-            returnA -< 
-                if not (curID == initialID) 
-                  then 
-                    error "need initialization!" 
-                  else
-                    ()
-            myID <- arrIO newID -< env
-            reg -< (eventHandler env myID, ia)
-            returnA -< myID
-        
-        forever $ 
-          do
-            mayReturn <- Mc.request $ proc (env, curID, ea, _) ->
-              app -< 
-                  if curID == myID
-                    then
-                      (arr Just <<< getter, ea)
-                    else do
-                      (arr (const Nothing), ea)
-            maybe (return ()) Mc.yield mayReturn
-
-
-
+-- 個別のイベント(THで自動生成したい)
 onMouse :: (Wx.Reactive w, ArrowIO a, ArrowApply a) => 
          P.ProcessA a (World a, w) 
               (P.Event WxC.EventMouse)
@@ -151,17 +153,3 @@ onCommand = listen (arrIO2 regIO) (arr getter)
     getter = const ()
           
 
-
-onInit = proc (World _ etp) -> af -< etp
-  where
-    af = P.construct $
-      do
-        ret <- P.awaits $ \(eid, _) ->
-          do
-            if not (eid == initialID)
-              then
-                error "Need initialization"
-              else
-                return ()
-        P.yield ()
-        forever $ P.awaitDo $ return ()

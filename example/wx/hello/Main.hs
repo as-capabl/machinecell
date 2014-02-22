@@ -30,9 +30,10 @@ instance ArrowIO MainArrow
     arrIO = Kleisli
 
 
-data MyForm a b = MyForm { 
+data MyForm a b c = MyForm { 
       myFormF :: Wx.Frame a,
-      myFormBtn :: Wx.Button b
+      myFormBtnDlg :: Wx.Button b,
+      myFormBtnQuit :: Wx.Button c
 }
 machine = proc world ->
   do
@@ -44,9 +45,13 @@ machine = proc world ->
         Nothing -> 
             returnA -< P.NoEvent
 
-        Just (MyForm f btn) ->
+        Just (MyForm f btnDlg btnQuit) ->
           do    
-            quitMsg <- onCommand -< (world, btn)
+            dialogMsg <- onCommand -< (world, btnDlg)
+            P.anyTime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
+                 -< const f `fmap` dialogMsg
+
+            quitMsg <- onCommand -< (world, btnQuit)
             P.anyTime (arrIO Wx.close) -< const f `fmap` quitMsg
 
             returnA -< P.NoEvent
@@ -55,9 +60,11 @@ machine = proc world ->
     setup = 
       do
         f <- Wx.frame [Wx.text := "Hello!"]
-        btn <- Wx.button f [Wx.text := "Quit"]
-        Wx.set f [Wx.layout := Wx.widget btn]
-        return $ MyForm f btn
+        btnDialog <- Wx.button f [Wx.text := "Show Dialog"]
+        btnQuit <- Wx.button f [Wx.text := "Quit"]
+        Wx.set f [Wx.layout := Wx.column 5 
+                        [Wx.widget btnDialog, Wx.widget btnQuit]]
+        return $ MyForm f btnDialog btnQuit
 
 
 main = 
