@@ -30,9 +30,10 @@ data ProcessA a b c =
 toProcessA :: ArrowApply a => Mc.Machine (a b) c -> ProcessA a (Event b) (Event c)
 toProcessA mc = ProcessA $ \succ -> concatenate (ProcessA_ pre post mc) succ
   where
-    pre (Just x, y) = (x, y)
-    pre (Nothing, y) = (NoEvent, y)
-    post (x, y) = (Just x, y)
+    pre (Just x, y) = (x, Left y)
+    pre (Nothing, y) = (NoEvent, Right y)
+    post (x, Left y) = (Just x, y)
+    post (_, Right y) = (Nothing, y)
 
 {-
 instance 
@@ -146,7 +147,6 @@ instance
         unresolve pre (Just x, Left d) = pre (Just (Left x), d)
         unresolve pre (Nothing, Left d) = pre (Nothing, d)
         unresolve pre (_, Right (x, d)) = pre (Just (Right x), d)
-
 
 {-
         resolve pre (Just (Left c), d) = 

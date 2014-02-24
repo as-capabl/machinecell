@@ -79,6 +79,18 @@ holdImpl init (ProcessA_ pre post mc) =
     mc' pre held r (Mc.Yield q fc) = 
         Mc.Yield (Event q, r) (mc' pre held r fc)
 
+sense :: (ArrowApply a, Eq b) =>
+         ProcessA a b (Event b)
+sense = arr Event >>> toProcessA (Mc.construct (mc Nothing))
+  where
+    mc (mayPrev) =
+      do
+        x <- awaitA
+        let differs = maybe True (not.(x ==)) mayPrev
+
+        if differs then Mc.yield x else return ()
+        mc (Just x)
+
 
 once :: ArrowApply a =>
         a b c ->
@@ -129,6 +141,10 @@ accumulate f init = proc evx ->
       next <- returnA -< f current `fmap` evx
     returnA -< current
 
+
+--
+-- ステップ実行
+--
 type Running a b c = ProcessA_ a b c
 
 startRun :: Arrow a => 

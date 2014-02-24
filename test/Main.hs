@@ -203,6 +203,20 @@ loops =
             in
               take 3 (result!!1) `shouldBe` [5, 5, 5]
 
+        it "the last value is valid." $
+          do
+            let
+                mc = Mc.repeatedly $
+                  do
+                    x <- awaitA
+                    Mc.yield x
+                    Mc.yield (x*2)
+                pa = proc x ->
+                  do
+                    rec y <- toProcessA mc -< (+z) <$> x
+                        z <- hold 0 <<< delay -< y
+                    returnA -< y
+            runProcessA pa [1, 10] `shouldBe` [1, 2, 12, 24]
 
     describe "Rules for ArrowLoop" $
       do
@@ -292,14 +306,16 @@ choice =
         it "temp1" $
          do
            let
-                ag = Cat.id::MyProcT (Event Int) (Event Int)
+                af = mkProc $ PgStop
+                ag = mkProc $ PgOdd PgNop
                 aj1 = arr Right
                 aj2 = arr $ either id id
-                l = [0]
-                r2 = stateProc 
-                       (aj1 >>> left ag >>> aj2) 
+                l = [1]
+                r1 = stateProc 
+                       (aj1 >>> left (af >>> ag) >>> aj2) 
                        l
-           r2 `shouldBe` ([0], [])
+              in
+                r1 `shouldBe` ([1],[])
 
         prop "left (f >>> g) = left f >>> left g" $ \e f g h j1 l ->
             let

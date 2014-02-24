@@ -80,7 +80,7 @@ onInit = proc world ->
 
 
 
-listen :: (ArrowIO a, ArrowApply a) =>
+listen :: (ArrowIO a, ArrowApply a, Eq initArg) =>
           a (EventArg -> IO (), initArg) () ->
           a EventArg ev ->
               P.ProcessA a
@@ -88,7 +88,7 @@ listen :: (ArrowIO a, ArrowApply a) =>
                    (P.Event ev)
 listen reg getter = proc (world@(World env etp), ia) ->
   do
-    initMsg <- onInit -< world
+    initMsg <- P.sense -< ia
     mMyID <- P.once (arrIO newID) -< fmap (const env) initMsg
 
     case mMyID
@@ -138,7 +138,7 @@ wxReactimate run init = Wx.start go
 
 
 -- 個別のイベント(THで自動生成したい)
-onMouse :: (Wx.Reactive w, ArrowIO a, ArrowApply a) => 
+onMouse :: (Wx.Reactive w, Eq w, ArrowIO a, ArrowApply a) => 
          P.ProcessA a (World a, w) 
               (P.Event WxC.EventMouse)
 onMouse = listen (arrIO2 regIO) (arr getter)
@@ -150,7 +150,7 @@ onMouse = listen (arrIO2 regIO) (arr getter)
 
 
 
-onCommand :: (Wx.Commanding w, ArrowIO a, ArrowApply a) => 
+onCommand :: (Wx.Commanding w, Eq w, ArrowIO a, ArrowApply a) => 
          P.ProcessA a (World a, w) (P.Event ())
 onCommand = listen (arrIO2 regIO) (arr getter)
   where
