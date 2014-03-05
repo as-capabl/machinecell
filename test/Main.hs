@@ -79,6 +79,18 @@ basics =
 
             result `shouldBe` resultA
 
+
+        it "has stop state" $
+          let
+              a2 = mkProc $ PgDouble PgNop
+              a3 = mkProc $ PgPush PgStop
+              l = [3, 3]
+
+              x = stateProc (a2 >>> a3)
+                   (l::[Int])
+            in
+              x `shouldBe` ([], [3])
+
 rules =
   do
     describe "ProcessA as Category" $
@@ -230,52 +242,6 @@ loops =
             pure (evx, f) = (f <$> evx, fixcore f)
             apure = arr pure
 
-        it "temp" $
-          let
-              a2 = mkProc $ PgPush PgNop
-              a3 = mkProc $ PgStop
-              l = [0, 0]
-
-              x1 = stateProc (a2 >>> loop apure >>> a3)
-                   (l::[Int])
-            in
-              x1 `shouldBe` ([], [0])
-
-        it "temp1.5" $
-          let
-              semiPure (Event x, f) = 
-                  (Event $ f x, \y -> if y `mod` 5 == 0 then y else y + f (y-1))
-              semiPure (NoEvent, d) = (NoEvent, undefined)
-              semiPure (End, d) = (End, id)
-              asemiPure = arr semiPure
-
-              a2 = mkProc $ PgDouble PgNop
-              a3 = mkProc $ PgDouble PgNop
-              l = [2]
-
-              x1 = stateProc (loop (first a2 >>> asemiPure) >>> a3)
-                   (l::[Int])
-              x2 = stateProc (a2 >>> loop (asemiPure) >>> a3)
-                   (l::[Int])
-            in
-              x1 `shouldBe` x2
-
-        it "temp2" $
-          let
-              a2 = mkProc $ PgDouble PgNop
-              a3 = mkProc $ PgPush PgStop
-              l = [3, 3]
-
-              x1 = stateProc (loop (first a2 >>> apure) >>> a3)
-                   (l::[Int])
-              x2 = stateProc (a2 >>> {-loop apure >>>-} a3)
-                   (l::[Int])
-            in
-              x2 `shouldBe` ([], [3])
-
-{-
-  -- 途中で止まってしまい通らない
-
         prop "left tightening" $ \(l, fx, fy, fz) ->
           let
               a1 = mkProc fx
@@ -302,7 +268,7 @@ loops =
                    (l::[Int])
             in
               x1 == x2
--}
+
 
 choice =
   do

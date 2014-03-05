@@ -89,16 +89,15 @@ listen :: (ArrowIO a, ArrowApply a, Eq initArg) =>
 listen reg getter = proc (world@(World env etp), ia) ->
   do
     initMsg <- P.sense -< ia
-    (
-      do
-        P.anyTime (arrIO newID) -< fmap (const env) initMsg
-      `P.passRecent` \myID ->
+    evId <- P.anyTime (arrIO newID) -< fmap (const env) initMsg
+
+    (returnA -< evId) `P.passRecent` \myID ->
       do
         P.anyTime reg -< fmap (const (handleProc env myID, ia)) initMsg
      
         ea <- listenID -< (world, myID)
         P.anyTime getter -< ea
-      )
+
 
 
 handleProc env eid arg =

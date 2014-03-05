@@ -127,32 +127,6 @@ instance
         unresolve (_, Right (x, d)) = (Just (Right x), d)
 
 
-{-
-instance
-    ArrowApply a => ArrowChoice (ProcessA a)
-  where
-    left (ProcessA f) = eith >>> ProcessA $ \succ -> f $ unassocA succ
-      where
-        eith = undefined
-
-        assocA (ProcessA_ pre post mc) = ProcessA_ (assoc pre) (assoc2 post) mc
-        unassocA (ProcessA_ pre post mc) = ProcessA_ (pre . unassoc) post mc
-
-
-        assoc pre (Just (Left x), z) = 
-            case pre (Just x, z) of (evp, c) -> (evp, Left (c, z))
-        assoc pre (Just (Right d), z) = 
-            case pre (Nothing, z) of (evp, c) -> (evp, Right (c, d, z))
-
-
---        assoc2 post (evq, Left (c, z)) = (Just $ post (evq, c), Left z)
---        assoc2 post (evq, Right (c, d, z)) = (Nothing, Right (d, z))
-        assoc2 = id
-
-        unassoc (Just x', Left z) = (Just (Left x') , z)
-        unassoc (_, Right (d, z)) = (Just (Right d), z)
--}
-
 
 
 instance
@@ -161,10 +135,8 @@ instance
     loop (ProcessA f) = 
         ProcessA $ 
           \prcd -> 
-              loopImpl (swap_ $ f $ first_ prcd)
+              loopProcessA_ (swap_ $ f $ first_ prcd)
       where
-        -- assocA (ProcessA_ pre post mc) = ProcessA_ (pre . assoc) post mc
-        -- unassocA (ProcessA_ pre post mc) = ProcessA_ (pre . unassoc) post mc
         first_ :: ProcessA_ a t (Maybe b, p)-> 
                  ProcessA_ a (t, d) (Maybe (b, d), Either p (p, d)) 
         first_ (ProcessA_ pre post mc) = 
@@ -186,104 +158,5 @@ instance
         swap_ (ProcessA_ pre post mc) = ProcessA_ pre (sw . post) mc
         sw (Just (b, d), Left p) = ((Just b, p), d)
         sw (_, Right (p, d)) = ((Nothing, p), d)
-        -- unassoc (x, (y, z)) = ((x, y), z)
 
-loopImpl ::
-    (ArrowApply a, ArrowLoop a) =>
-    ProcessA_ a (b, d) (c, d) -> ProcessA_ a b c
-
-loopImpl (ProcessA_ pre post Mc.Stop) =
-    ProcessA_ pre' post' Mc.Stop
-  where
-    pureLoop (evq, x) = 
-        let 
-            (evp, r) = pre (x, d)
-            (y, d) = post (evq, r)
-          in
-            (evp, y)
-            
-    pre' x = pureLoop (NoEvent, x)
-
-    post' (_, pure) = pure
-
-loopImpl (ProcessA_ pre post mc) =
-    ProcessA_ pre' post' (loopMc pureLoop mc)
-  where
-    pureLoop (evq, x) = 
-        let 
-            (evp, r) = pre (x, d)
-            (y, d) = post (evq, r)
-          in
-            (evp, y)
-            
-    pre' x = (Event x, x)
-
-    post' (evq, x) = 
-        case evq of 
-          Event y -> y
-          NoEvent -> snd $ pureLoop (NoEvent, x)
-          End -> snd $ pureLoop (End, x)
-
-loopMc :: 
-    (ArrowLoop a, ArrowApply a) =>
-    ((Event q, b)->(Event p, c)) ->
-    Mc.Machine (a p) q ->
-    Mc.Machine (a b) c
-loopMc pureLoop mc@(Mc.Await _ _ ff) = 
-    Mc.Await 
-      (id)
-      (theArrow pureLoop mc) 
-      (loopMc pureLoop ff)
-
-loopMc pureLoop Mc.Stop = Mc.Stop
-
-theArrow :: 
-    (ArrowLoop a, ArrowApply a) =>
-    ((Event q, b)->(Event p, c)) ->
-    Mc.Machine (a p) q ->
-    a b (Mc.Machine (a b) c)
-
-theArrow pureLoop mc@(Mc.Await fc f _) =
-      proc b ->
-        do
-          (c, mc'') <- loop core -< b
-          let
-            (yields, mcRet) = restYield pureLoop b mc'' 
-          returnA -< (Mc.Yield c . yields) (loopMc pureLoop mcRet)
-  where
-    core = 
-      proc (b, evq) ->
-        do
-          let (evp, c) = pureLoop (evq, b)
-          mc' <- (| hEv' 
-                    (\p -> arr fc <<< f -< p)
-                    (returnA -< mc)
-                    (returnA -< Mc.Stop)
-                  |) evp
-          let (evq', mc'') = oneYield mc'
-          returnA -< ((c, mc''), evq')
-
-theArrow pureLoop Mc.Stop =
-      proc b ->
-        do
-          (evp, c) <- arr pureLoop -< (NoEvent, b)
-          returnA -< next c evp
-  where
-    next c NoEvent = Mc.Yield c $ loopMc pureLoop Mc.Stop
-    next _ _ = Mc.Stop
-
--- theArrow :: (ArrowApply a, ArrowLoop a) => a (x, i) (mc, o)
-normal (Mc.Await fc f ff) = f >>> arr (\x -> oneYield $ fc x)
--- oneYield (Mc.Yield (x, d) ff) = ((x, ff), d)
-oneYield (Mc.Yield x mc') = (Event x, mc')
-oneYield mc = (NoEvent, mc)
-
-restYield pureLoop b (Mc.Yield x mc') = 
-    let
-        (_, c) = pureLoop (Event x, b)
-        (yields, mcRet) = restYield pureLoop b mc'
-      in
-        (Mc.Yield c . yields, mcRet)
-
-restYield _ _ mc = (id, mc)
 

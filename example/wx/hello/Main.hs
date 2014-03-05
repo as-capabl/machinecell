@@ -10,7 +10,7 @@ module
 where
 
 import qualified Control.Arrow.Machine as P
-import Control.Applicative ((<$>), (<*>))
+import Control.Applicative ((<$>), (<*>), (<$))
 import qualified Control.Category as Cat
 import Control.Arrow
 import Control.Arrow.ArrowIO
@@ -21,7 +21,7 @@ import qualified Graphics.UI.WX as Wx
 import Graphics.UI.WX (Prop ((:=)))
 import qualified Graphics.UI.WXCore as WxC
 
-import WxHandler
+import qualified WxHandler as WxP
 
 type MainArrow = Kleisli IO
 runMainArrow = runKleisli
@@ -37,20 +37,18 @@ data MyForm a b c = MyForm {
 }
 machine = proc world ->
   do
-    initMsg <- onInit -< world
-    (
-      do
-        P.anyTime (arrIO0 setup) -< initMsg
+    initMsg <- WxP.onInit -< world
+    form <- P.anyTime (arrIO0 setup) -< initMsg
 
-      `P.passRecent` \(MyForm f btnDlg btnQuit) ->
+    (returnA -< form) `P.passRecent` \(MyForm f btnDlg btnQuit) ->
       do    
-        dialogMsg <- onCommand -< (world, btnDlg)
+        dialogMsg <- WxP.onCommand -< (world, btnDlg)
         P.anyTime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
-               -< const f `fmap` dialogMsg
+                -< f <$ dialogMsg
 
-        quitMsg <- onCommand -< (world, btnQuit)
-        P.anyTime (arrIO Wx.close) -< const f `fmap` quitMsg
-      )
+        quitMsg <- WxP.onCommand -< (world, btnQuit)
+        P.anyTime (arrIO Wx.close) -< f <$ quitMsg
+
 
   where
     setup = 
@@ -60,9 +58,10 @@ machine = proc world ->
         btnQuit <- Wx.button f [Wx.text := "Quit"]
         Wx.set f [Wx.layout := Wx.column 5 
                         [Wx.widget btnDialog, Wx.widget btnQuit]]
+
         return $ MyForm f btnDialog btnQuit
 
 
 main = 
   do
-    wxReactimate runMainArrow machine
+    WxP.wxReactimate runMainArrow machine

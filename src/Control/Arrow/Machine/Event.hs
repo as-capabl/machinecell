@@ -35,6 +35,18 @@ class
     isOccasion :: a -> Bool
     isOccasion x = not (isNoEvent x) && not (isEnd x)
 
+instance
+    (Occasional a, Occasional b) => Occasional (a, b)
+  where
+    noEvent = (noEvent, noEvent)
+    end = (end, end)
+    isOccasion xy@(x, y) = 
+        (isOccasion x || isOccasion y) && not (isEnd xy)
+    isNoEvent xy = 
+        not (isOccasion xy) && not (isEnd xy)
+    isEnd (x, y) = isEnd x && isEnd y
+
+
 data Event a = Event a | NoEvent | End deriving (Eq, Show)
 
 instance 

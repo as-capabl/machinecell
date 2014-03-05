@@ -169,19 +169,54 @@ passRecent af ag = proc e ->
         evMaybe (return ()) Mc.yield evNew
         corePlan evNew
 
---
--- ステップ実行
---
+withRecent :: (ArrowApply a, Occasional o) =>
+              ProcessA a (e, b) o ->
+              ProcessA a (e, Event b) o
+withRecent af = proc (e, evb) ->
+    (returnA -< evb) `passRecent` (\b -> af -< (e, b))
+
+
+variable :: (ArrowApply a, ArrowLoop a, Occasional o) =>
+            ProcessA a e b ->
+            ProcessA a (e, b) (o, Event b) ->
+            ProcessA a e o
+
+variable af ag = proc e ->
+  do
+    binit <- af -< e
+    rec 
+        (o, bnew) <-(| withRecent (\b -> ag -< (e, b)) |) bdly
+        bdly <- (once -< Event binit) `successive` (delay -< bnew)
+    returnA -< o
+
+once :: ArrowApply a => ProcessA a (Event b) (Event b)
+once = toProcessA $ Mc.construct $ awaitA >>= Mc.yield
+
+successive :: ArrowApply a => 
+              ProcessA a e (Event o) ->
+              ProcessA a e (Event o) ->
+              ProcessA a e (Event o)
+successive af ag = proc e ->
+  do
+    x <- af -< e
+    if isEnd x
+      then
+        ag -< e
+      else
+        returnA -< x
+
+---
+--- ステップ実行
+---
 type Running a b c = ProcessA_ a b c
 
-startRun :: Arrow a => 
-            ProcessA a (Event b) (Event c) -> 
-            ProcessA_ a (Event b) (Event c)
+startRun :: Arrow a =>
+             ProcessA a (Event b) (Event c) ->
+             ProcessA_ a (Event b) (Event c)
 startRun = resolveCPS
-
-stepRun :: ArrowApply a => 
-           ProcessA_ a (Event b) (Event c) -> 
-           a b ([c], ProcessA_ a (Event b) (Event c))
+stepRun :: ArrowApply a =>
+            ProcessA_ a (Event b) (Event c) ->
+            a b ([c], ProcessA_ a (Event b) (Event c))
 stepRun (ProcessA_ pre post mc) = proc x ->
   do
     let
@@ -192,8 +227,11 @@ stepRun (ProcessA_ pre post mc) = proc x ->
         cs = evcs >>= evMaybe mzero return
     returnA -< (cs, ProcessA_ pre post mc')
 
---isStop :: ProcessA_ a b c -> 
-isStop = undefined
+
+
+isStop :: ProcessA_ a b c -> Bool
+isStop (ProcessA_ pre post Mc.Stop) = True
+isStop _ = False
 
 {-
         Mc.construct (holder pre x) ~> Mc.fit first mc

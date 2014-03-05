@@ -10,7 +10,8 @@ module
          ProcessA_(..), 
          runProcessA_, 
          concatenate,
-         feedTo
+         feedTo,
+         loopProcessA_
       )
 where
 
@@ -250,3 +251,108 @@ sweep2nd fmid Mc.Stop =
 sweep2nd fmid mc2 =
     proc _ ->
         returnA -< ([], mc2)
+
+
+
+--
+-- ArrowLoop
+--
+loopProcessA_ ::
+    (ArrowApply a, ArrowLoop a) =>
+    ProcessA_ a (b, d) (c, d) -> ProcessA_ a b c
+
+loopProcessA_ (ProcessA_ pre post Mc.Stop) =
+    ProcessA_ pre' post' Mc.Stop
+  where
+    pureLoop (evq, x) = 
+        let 
+            (evp, r) = pre (x, d)
+            (y, d) = post (evq, r)
+          in
+            (evp, y)
+            
+    pre' x = pureLoop (NoEvent, x)
+
+    post' (_, pure) = pure
+
+loopProcessA_ (ProcessA_ pre post mc) =
+    ProcessA_ pre' post' (loopMc pureLoop mc)
+  where
+    pureLoop (evq, x) = 
+        let 
+            (evp, r) = pre (x, d)
+            (y, d) = post (evq, r)
+          in
+            (evp, y)
+            
+    pre' x = (Event x, x)
+
+    post' (evq, x) = 
+        case evq of 
+          Event y -> y
+          NoEvent -> snd $ pureLoop (NoEvent, x)
+          End -> snd $ pureLoop (End, x)
+
+loopMc :: 
+    (ArrowLoop a, ArrowApply a) =>
+    ((Event q, b)->(Event p, c)) ->
+    Mc.Machine (a p) q ->
+    Mc.Machine (a b) c
+loopMc pureLoop mc@(Mc.Await _ _ ff) = 
+    Mc.Await 
+      (id)
+      (theArrow pureLoop mc) 
+      (loopMc pureLoop ff)
+
+loopMc pureLoop Mc.Stop = Mc.Stop
+
+theArrow :: 
+    (ArrowLoop a, ArrowApply a) =>
+    ((Event q, b)->(Event p, c)) ->
+    Mc.Machine (a p) q ->
+    a b (Mc.Machine (a b) c)
+
+theArrow pureLoop mc@(Mc.Await fc f _) =
+      proc b ->
+        do
+          (c, mc'') <- loop core -< b
+          let
+            (yields, mcRet) = restYield pureLoop b mc'' 
+          returnA -< (Mc.Yield c . yields) (loopMc pureLoop mcRet)
+  where
+    core = 
+      proc (b, evq) ->
+        do
+          let (evp, c) = pureLoop (evq, b)
+          mc' <- (| hEv' 
+                    (\p -> arr fc <<< f -< p)
+                    (returnA -< mc)
+                    (returnA -< Mc.Stop)
+                  |) evp
+          let (evq', mc'') = oneYield mc'
+          returnA -< ((c, mc''), evq')
+
+theArrow pureLoop Mc.Stop =
+      proc b ->
+        do
+          (evp, c) <- arr pureLoop -< (NoEvent, b)
+          returnA -< next c evp
+  where
+    next c NoEvent = Mc.Yield c $ loopMc pureLoop Mc.Stop
+    next _ _ = Mc.Stop
+
+-- theArrow :: (ArrowApply a, ArrowLoop a) => a (x, i) (mc, o)
+normal (Mc.Await fc f ff) = f >>> arr (\x -> oneYield $ fc x)
+-- oneYield (Mc.Yield (x, d) ff) = ((x, ff), d)
+oneYield (Mc.Yield x mc') = (Event x, mc')
+oneYield mc = (NoEvent, mc)
+
+restYield pureLoop b (Mc.Yield x mc') = 
+    let
+        (_, c) = pureLoop (Event x, b)
+        (yields, mcRet) = restYield pureLoop b mc'
+      in
+        (Mc.Yield c . yields, mcRet)
+
+restYield _ _ mc = (id, mc)
+
