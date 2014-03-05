@@ -25,10 +25,10 @@ traceMc = const id
 
 
 data ProcessA a b c =
-               ProcessA (forall t d. ProcessA_ a (Maybe c, d) t -> ProcessA_ a (Maybe b, d) t)
+               ProcessA (forall t d. ProcessA_ a t (Maybe b, d) -> ProcessA_ a t (Maybe c, d))
 
 toProcessA :: ArrowApply a => Mc.Machine (a b) c -> ProcessA a (Event b) (Event c)
-toProcessA mc = ProcessA $ \succ -> concatenate (ProcessA_ pre post mc) succ
+toProcessA mc = ProcessA $ \prdc -> concatenate prdc (ProcessA_ pre post mc)
   where
     pre (Just x, y) = (x, Left y)
     pre (Nothing, y) = (NoEvent, Right y)
@@ -46,7 +46,7 @@ instance
   where
     await = Cat.id
 -}
-awaitA :: Arrow a => Mc.Plan b (a b) b
+awaitA :: Arrow a => Mc.Plan c (a b) b
 awaitA = Mc.request $ Cat.id
 
 {-
@@ -67,56 +67,34 @@ runProcessA pa =
     runProcessA_ $ resolveCPS pa
 
 resolveCPS :: Arrow a => ProcessA a (Event b) (Event c) -> ProcessA_ a (Event b) (Event c)
-resolveCPS (ProcessA cps) = dropIt $ cps $ ProcessA_ pre1 post1 mc1
+resolveCPS (ProcessA cps) = dropMc $ cps (ProcessA_ pre1 post1 mc1)
   where
-    pre1 (Just x, y) = (x, y)
-    pre1 (Nothing, y) = (NoEvent, y)
-    post1 = fst
+    pre1 evx = (evx, ())
+    post1 (evx, _) = (Just evx, ())
     mc1 = Mc.pass Cat.id
 
-    dropIt (ProcessA_ pre post mc) = ProcessA_ (pre . pad) post mc
-    pad x = (Just x, error "This may not be touched.")
+    dropMc (ProcessA_ pre post mc) = ProcessA_ pre (dropImpl . post) mc
+    dropImpl (Just evc, _) = evc
+    dropImpl (Nothing, _) = NoEvent
 
 
 
-{-
--- bind
-bind Mc.Stop = arr $ const Mc.Stop
-
-bind (Mc.Yield y gc) = proc x ->
-  do
-    gc' <- bind gc -< x
-    returnA -< Mc.Yield y gc' 
-
-bind (Mc.Await gc g gf) = proc x ->
-  do
-    y <- g -< x
-    returnA -< gc y
-
-
---successively
-successive (Mc.Yield x fc) g = Mc.Yield x $ successive fc g
-
-successive (Mc.Await fc m ff) g = Mc.Await (\x -> successive (fc x) g) m (successive ff g)
-
-successive Mc.Stop g = g
--}
 
 
 instance
     ArrowApply a => Cat.Category (ProcessA a)
   where
     id = ProcessA id
-    ProcessA f . ProcessA g = ProcessA (g . f)
+    ProcessA f . ProcessA g = ProcessA (f . g)
 
 instance 
     ArrowApply a => Arrow (ProcessA a)
   where
     arr f = ProcessA $ arrImpl (fmap f)
-    first (ProcessA f) = ProcessA $ \succ -> assocA $ f $ unassocA succ
+    first (ProcessA f) = ProcessA $ \prdc -> unassocA $ f (assocA prdc)
       where
-        assocA (ProcessA_ pre post mc) = ProcessA_ (pre . assoc) post mc
-        unassocA (ProcessA_ pre post mc) = ProcessA_ (pre . unassoc) post mc
+        assocA (ProcessA_ pre post mc) = ProcessA_ pre (assoc . post) mc
+        unassocA (ProcessA_ pre post mc) = ProcessA_ pre (unassoc . post) mc
 
         assoc (Just (x, y), z) = (Just x, (Just y, z))
         assoc (Nothing, z) = (Nothing, (Nothing, z))
@@ -125,48 +103,30 @@ instance
         unassoc (_, (_, z)) = (Nothing, z)
 
 
-arrImpl :: (b->c) -> ProcessA_ a (c,d) t0 -> ProcessA_ a (b,d) t0
-arrImpl f (ProcessA_ pre post mc) = ProcessA_ (pre . first f) post mc
+arrImpl :: (b->c) -> ProcessA_ a t (b,d) -> ProcessA_ a t (c,d)
+arrImpl f (ProcessA_ pre post mc) = ProcessA_ pre (first f . post) mc
 
 
 
 instance
     ArrowApply a => ArrowChoice (ProcessA a)
   where
-    left (ProcessA f) = ProcessA $ \cont -> resolveA (f (unresolveA cont))
+    left (ProcessA f) = ProcessA $ \prdc -> unresolveA (f (resolveA prdc))
       where
         resolveA (ProcessA_ pre post mc) = 
-            ProcessA_ (resolve pre) post mc
+            ProcessA_ pre (resolve . post) mc
         unresolveA (ProcessA_ pre post mc) = 
-            ProcessA_ (unresolve pre) post mc
+            ProcessA_ pre (unresolve . post) mc
 
-        resolve pre (Just (Left c), d) = pre (Just c, Left d)
-        resolve pre (Nothing, d) = pre (Nothing, Left d)
-        resolve pre (Just (Right x), d) = pre (Nothing, Right (x, d))
+        resolve (Just (Left c), d) = (Just c, Left d)
+        resolve (Nothing, d) = (Nothing, Left d)
+        resolve (Just (Right x), d) = (Nothing, Right (x, d))
 
-        unresolve pre (Just x, Left d) = pre (Just (Left x), d)
-        unresolve pre (Nothing, Left d) = pre (Nothing, d)
-        unresolve pre (_, Right (x, d)) = pre (Just (Right x), d)
+        unresolve (Just x, Left d) = (Just (Left x), d)
+        unresolve (Nothing, Left d) = (Nothing, d)
+        unresolve (_, Right (x, d)) = (Just (Right x), d)
 
-{-
-        resolve pre (Just (Left c), d) = 
-            let (evp, r) = pre (Just c, (d))
-              in
-                (evp, Left r)
-        resolve pre (Just (Right x), d) = 
-            let (evp, r) = pre (Nothing, d))
-              in
-                (evp, Right (r, x))
-        resolve _ (Nothing, d) = 
-            let (evp, r) = pre (Nothing, d))
-              in
-                (evp, Left r)
 
-        unresolve post (evq, Left r) =
-            let fin = post (evq, r)
-              in
-                (
--}
 {-
 instance
     ArrowApply a => ArrowChoice (ProcessA a)
@@ -200,31 +160,32 @@ instance
   where
     loop (ProcessA f) = 
         ProcessA $ 
-          \succ -> 
-              loopImpl (swap_ $ f $ first_ succ)
+          \prcd -> 
+              loopImpl (swap_ $ f $ first_ prcd)
       where
         -- assocA (ProcessA_ pre post mc) = ProcessA_ (pre . assoc) post mc
         -- unassocA (ProcessA_ pre post mc) = ProcessA_ (pre . unassoc) post mc
-        first_ :: ProcessA_ a (Maybe c, p) t-> 
-                 ProcessA_ a (Maybe (c, d), p) (t, d)
+        first_ :: ProcessA_ a t (Maybe b, p)-> 
+                 ProcessA_ a (t, d) (Maybe (b, d), Either p (p, d)) 
         first_ (ProcessA_ pre post mc) = 
             ProcessA_ (assoca pre) (unassoca post) mc
-        assoca pre (Just (x, d), p) = 
-            let (ev, r) = pre (Just x, p) in (ev, (r, Just d))
-        assoca pre (Nothing, p) = 
-            let (ev, r) = pre (Nothing, p) in (ev, (r, Nothing))
-        unassoca post (evx, (r, mayD)) = 
+        assoca pre (x, d) = 
+            let (ev, r) = pre x in (ev, (r, d))
+        unassoca post (evx, (r, d)) = 
             let
-                t = post (evx, r)
+                (mb, p) = post (evx, r)
               in
-                (t, fromJust mayD)
+                case mb 
+                  of 
+                    Just x -> (Just (x, d), Left p)
+                    Nothing -> (Nothing, Right (p, d))
 
 
-        swap_ :: ProcessA_ a (Maybe (b, d), p) (t, d)-> 
-                 ProcessA_ a ((Maybe b, p), d) (t, d)
-        swap_ (ProcessA_ pre post mc) = ProcessA_ (pre . sw) post mc
-        sw ((Just b, d), p) = (Just (b, p), d)
-        sw ((Nothing, d), p) = (Nothing, d)
+        swap_ :: ProcessA_ a (t, d) (Maybe (b, d), Either p (p, d)) -> 
+                 ProcessA_ a (t, d) ((Maybe b, p), d)
+        swap_ (ProcessA_ pre post mc) = ProcessA_ pre (sw . post) mc
+        sw (Just (b, d), Left p) = ((Just b, p), d)
+        sw (_, Right (p, d)) = ((Nothing, p), d)
         -- unassoc (x, (y, z)) = ((x, y), z)
 
 loopImpl ::
@@ -325,3 +286,4 @@ restYield pureLoop b (Mc.Yield x mc') =
         (Mc.Yield c . yields, mcRet)
 
 restYield _ _ mc = (id, mc)
+

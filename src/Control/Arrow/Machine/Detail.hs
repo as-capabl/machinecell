@@ -36,21 +36,28 @@ data ProcessA_ a b c =
 
 
 
-runProcessA_ (ProcessA_ pre post mc) =
+runProcessA_  pa =
     proc xs ->
       do
-        (_, ys, _) <- runHelper (snd $ pre NoEvent) 
-                      -< (map (pre . Event) xs ++ [pre End], [], mc)
-        returnA -< ev2List $ map post ys
+        let newPa = concatenate (source xs) pa
+        go2 newPa -<< []
   where
-    -- runHelper
-    runHelper :: ArrowApply a => r 
-                   -> a ([(Event b, r)], [(Event c, r)], Mc.Machine (a b) c)
-                        ([(Event b, r)], [(Event c, r)], Mc.Machine (a b) c)
-
-    runHelper r = proc (xs, ys, mc) -> 
+    go2 (ProcessA_ pre post mc) = proc _ ->
       do
-        transMc r mc -<< (xs, ys)
+        ys <- go (snd $ pre NoEvent) mc (map pre [Event (), NoEvent]) -< []
+        returnA -< ev2List $ map post ys
+    
+    go r mc [] = proc ys ->
+      do
+        (l, _) <- feedTo id mc -< End
+        l' <- returnA -<  zip l (repeat r)
+        returnA -< ys ++ l'
+
+    go r mc ((x,r'):xs) = proc ys ->
+      do
+        (l, mc2) <- feedTo id mc -< x
+        l' <- returnA -< zip l ([r'] ++ repeat r)
+        go r mc2 xs -<< ys ++ l'
 
     -- ev2list
     ev2List ys = 
@@ -60,60 +67,16 @@ runProcessA_ (ProcessA_ pre post mc) =
           Event z -> [z]
           _ -> []
 
-    -- transMc
-    transMc :: ArrowApply a => r -> Mc.Machine (a b) c 
-                 -> a ([(Event b, r)], [(Event c, r)]) 
-                      ([(Event b, r)], [(Event c, r)], 
-                       Mc.Machine (a b) c)
-
-    transMc r Mc.Stop = 
-        proc (xs, ys) -> go xs -<< ys
+    source xs = ProcessA_ pre post mc
       where
-        go ((NoEvent, r'):xs') = proc ys ->
-          runHelper r' -< (xs', ys ++ [(NoEvent, r')], Mc.Stop)
-        go xs = proc ys -> 
-          returnA -< (xs, ys, Mc.Stop)
+        pre = \evx -> (evx, ())
+        post = fromEvent NoEvent . fst -- TODO: NoEvent不要なら排除
+        mc = sourceMc xs
 
-    transMc r (Mc.Yield y fc) = 
-        proc (xs, ys) -> runHelper r -< (xs, ys ++ [(Event y, r)], fc)
-
-    transMc r (Mc.Await fc f ff) = 
-        proc (xxs, ys) -> awaitIt r xxs fc f ff -<< ys
-
-    -- awaitIt
-    awaitIt :: ArrowApply a => r -> [(Event b, r)]
-                     -> (d -> Mc.Machine (a b) c)
-                     -> a b d
-                     -> Mc.Machine (a b) c
-                     -> a [(Event c, r)] 
-                          ([(Event b, r)], [(Event c, r)], Mc.Machine (a b) c)
-
-    awaitIt r [] fc f ff = proc ys -> runHelper r -< ([], ys, ff)
-
-    awaitIt _ (x:xs) fc f ff = 
-        proc ys -> 
-          do
-            let r = snd x
-            ret <- 
-              (|
-                hEv'
-                  (\bx -> do {bx' <- f -< bx; returnA -< (Event bx', r)})
-                  (returnA -< (NoEvent, r))
-                  (returnA -< (End, r))
-                |)
-                  (fst x)
-            let mcNext = cont fc f ff (fst ret)
-            stepNext mcNext (snd ret) -<< (xs, ys, mcNext)
-      where
-        cont fc _ _ (Event x) = fc x
-        cont fc f ff NoEvent = Mc.Await fc f ff
-        cont _ _ ff End = ff
-
-        -- なくていい
-        stepNext Mc.Stop _ = returnA
-        stepNext _ r = runHelper r
-
-
+    sourceMc xs = Mc.construct $
+      do
+        _ <- Mc.request Cat.id
+        mapM (\x -> Mc.yield (Event x)) xs
 
 
 -- concatenate
@@ -142,7 +105,7 @@ concatenate' :: ArrowApply a => Mc.Machine (a p) q
              -> Mc.Machine (a r) s
              -> CM a c p q s
 
-concatenate' _ _ Mc.Stop = Mc.Stop
+-- concatenate' _ _ Mc.Stop = Mc.Stop
 
 concatenate' mc1@(Mc.Await fc f ff) fmid mc2 = 
     traceMc "1:await" $
@@ -155,7 +118,7 @@ concatenate' mc1@(Mc.Await fc f ff) fmid mc2 =
                     (\x ->
                       do
                         y <- f -< x
-                        sweep1st (fc y) fmid mc2 -<< c)
+                        (sweep1st (fc y) fmid mc2 -<< c))
                     (sweep1st mc1 fmid mc2 -<< c)
                     (returnA -< (id, ff, mc2))
                   |) 
@@ -171,7 +134,7 @@ concatenate' Mc.Stop fmid mc2 =
             (| hEv'
                 (\x -> returnA -< Mc.Stop)
                 (do
-                  (yields, mc2') <- yieldTo2nd fmid mc2 -< (End, c)
+                  (yields, mc2') <- yieldTo2nd fmid mc2 -< (NoEvent, c)
                   returnA -< yields $ concatenate' Mc.Stop fmid mc2')
                 (returnA -< Mc.Stop)
               |)
@@ -186,26 +149,8 @@ sweep1st :: ArrowApply a => Mc.Machine (a p) q
                  Mc.Machine (a p) q, 
                  Mc.Machine (a r) s)
 
-sweep1st' :: ArrowApply a => Mc.Machine (a p) q
-         -> ((Event q, c) -> Event r)
-         -> Mc.Machine (a r) s
-         -> a c (CM a c p q s -> CM a c p q s, 
-                 Mc.Machine (a p) q, 
-                 Mc.Machine (a r) s)
-
-sweep1st _ _ Mc.Stop = 
-    proc _ ->
-      returnA -< (id, Mc.Stop, Mc.Stop)
-
 sweep1st mc1@(Mc.Yield x fc) fmid mc2 = 
     sweep1st' mc1 fmid mc2
-
-
-sweep1st Mc.Stop fmid mc2 = 
-    proc c ->
-      do
-        (yields, mc2') <- yieldTo2nd fmid mc2 -< (End, c)
-        returnA -< (yields, Mc.Stop, mc2')
 
 sweep1st mc1 fmid mc2 = 
     traceMc "1:no yield" $ proc c ->
@@ -213,27 +158,13 @@ sweep1st mc1 fmid mc2 =
         (yields, mc2') <- yieldTo2nd fmid mc2 -< (NoEvent, c)
         returnA -< (yields, mc1, mc2')
 
-sweep1st' _ _ Mc.Stop = 
-    proc _ ->
-      returnA -< (id, Mc.Stop, Mc.Stop)
-{-
-sweep1st' (Mc.Yield x fc) fmid Mc.Stop = 
-    traceMc "1:yield" $ proc c ->
-      do
-        (| hEv'
-            (\y -> returnA -< (Mc.Yield (Event x, End), Mc.Stop, Mc.Stop))
-            (cont -< c) 
-            (returnA -< (Mc.Yield (Event x, End), Mc.Stop, Mc.Stop))
-          |) -- TODO: 失敗でもsweep1stすべきでは？
-            (fmid (Event x, c))
-  where
-    mc2 = Mc.Stop
-    cont = proc c ->
-      do
-        (yields, mc2') <- yieldTo2nd fmid mc2 -< (Event x, c)
-        (yieldsRest, mc1', mc2') <- sweep1st' fc fmid mc2' -<< c
-        returnA -< (yields . yieldsRest, mc1', mc2')
--}
+sweep1st' :: ArrowApply a => Mc.Machine (a p) q
+         -> ((Event q, c) -> Event r)
+         -> Mc.Machine (a r) s
+         -> a c (CM a c p q s -> CM a c p q s, 
+                 Mc.Machine (a p) q, 
+                 Mc.Machine (a r) s)
+
 sweep1st' (Mc.Yield x fc) fmid mc2 = 
     traceMc "1:yield" $ proc c ->
       do
@@ -248,10 +179,8 @@ sweep1st' (Mc.Yield x fc) fmid mc2 =
         (yieldsRest, mc1', mc2') <- sweep1st' fc fmid mc2' -<< c
         returnA -< (yields . yieldsRest, mc1', mc2')
 
-sweep1st' mc1 fmid mc2 = 
-    proc c ->
-      do
-        returnA -< (id, mc1, mc2)
+sweep1st' mc1 _ mc2 = proc _ -> returnA -< (id, mc1, mc2)
+
 
 yieldTo2nd :: ArrowApply a => ((Event q, c) -> Event r)
            -> Mc.Machine (a r) s
@@ -266,8 +195,10 @@ yieldTo2nd fmid mc2 = proc evqc ->
     (ys, nextMc) <- feedTo fmid' mc2 -<< evq
     returnA -< (listToMc evq ys, nextMc)
   where
-    listToMc r (x:xs) = Mc.Yield (r, x) . listToMc r xs
-    listToMc r [] = id
+    listToMc evq (End:_) = Mc.Yield (evq, End) . const Mc.Stop
+    listToMc evq (x:xs) = Mc.Yield (evq, x) . listToMc NoEvent xs
+    listToMc NoEvent [] = id
+    listToMc evr [] = Mc.Yield (evr, NoEvent)
 
 
 
@@ -284,31 +215,37 @@ feedTo fmid mc2@(Mc.Await gc g gf) =
             (\x -> 
               do 
                 y <- g -< x
-                sweep2nd fmid (gc y)-<< (evx, NoEvent))
-            (sweep2nd fmid mc2 -<< (evx, NoEvent))
+                sweep2nd fmid (gc y)-<< ())
+            (sweep2nd fmid mc2 -<< ())
             (returnA -< ([End], gf))
           |) 
             (fmid evx)
-
-        -- 最初の一回だけev1はev2でない値を持ち得る
         
 
 feedTo fmid Mc.Stop = 
     traceMc "2:stop" $ proc evx ->
-      returnA -< ([End], Mc.Stop)
+      do
+        (| hEv'
+           (\_ -> returnA -< ([End], Mc.Stop))
+           (returnA -< ([], Mc.Stop))
+           (returnA -< ([End], Mc.Stop))
+          |)
+           evx
 --      returnA -< (id, Mc.Stop)
       
 
 feedTo fmid (Mc.Yield _ _) = undefined
 
 sweep2nd fmid (Mc.Yield y gc) = 
-    traceMc "2:yield" $ proc (evs1, evs2) ->
+    traceMc "2:yield" $ proc () ->
       do
-        let ev1 = fmid evs1
-        let ev2 = fmid evs2
-
-        (yields, mc2) <- sweep2nd fmid gc -< (evs2, evs2)
+        (yields, mc2) <- sweep2nd fmid gc -< ()
         returnA -< ([Event y] ++ yields, mc2)
+
+sweep2nd fmid Mc.Stop = 
+    traceMc "2:yield" $ proc () ->
+      do
+        returnA -< ([End], Mc.Stop)
 
 sweep2nd fmid mc2 =
     proc _ ->

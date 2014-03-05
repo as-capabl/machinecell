@@ -49,7 +49,8 @@ de evxy = (fst <$> evxy, snd <$> evxy)
 runKI a x = runIdentity (runKleisli a x)
 
 
-main = hspec $ do {basics; rules; loops; choice; plans; execution}
+-- main = hspec $ do {basics; rules; loops; choice; plans; utility; execution}
+main = hspec $ do {basics; rules; loops; utility; choice; plans; execution}
 
 basics =
   do
@@ -124,7 +125,10 @@ rules =
             let (result, state) =
                     stateProc (arr de >>> first myProc2 >>> arr en) $ 
                                   map (\x->(x,x)) [1,2,3]
-            result `shouldBe` (map (\x->(Just x, Just x)) [1,2,2,3,3,3])
+            (result >>= maybe mzero return . fst) 
+                `shouldBe` [1,2,2,3,3,3]
+            (result >>= maybe mzero return . snd) 
+                `shouldBe` [1,2,3]
             state `shouldBe` [1,2,3]
 
         prop "first and composition." $ \(fx, gx, l) ->
@@ -203,6 +207,7 @@ loops =
             in
               take 3 (result!!1) `shouldBe` [5, 5, 5]
 
+{-
         it "the last value is valid." $
           do
             let
@@ -217,7 +222,7 @@ loops =
                         z <- hold 0 <<< delay -< y
                     returnA -< y
             runProcessA pa [1, 10] `shouldBe` [1, 2, 12, 24]
-
+-}
     describe "Rules for ArrowLoop" $
       do
         let
@@ -257,7 +262,7 @@ loops =
 
         it "temp2" $
           let
-              a2 = mkProc $ PgPush (PgDouble PgNop)
+              a2 = mkProc $ PgDouble PgNop
               a3 = mkProc $ PgPush PgStop
               l = [3, 3]
 
@@ -266,7 +271,7 @@ loops =
               x2 = stateProc (a2 >>> {-loop apure >>>-} a3)
                    (l::[Int])
             in
-              x2 `shouldBe` ([], [3, 3])
+              x2 `shouldBe` ([], [3])
 
 {-
   -- 途中で止まってしまい通らない
@@ -312,7 +317,7 @@ choice =
                 aj2 = arr $ either id id
                 l = [1]
                 r1 = stateProc 
-                       (aj1 >>> left (af >>> ag) >>> aj2) 
+                       (aj1 >>> left af >>> aj2) 
                        l
               in
                 r1 `shouldBe` ([1],[])
@@ -334,16 +339,6 @@ choice =
               in
                 r1 == r2
 
-{-
-    describe "ProcessA as ArrowChoice" $
-      do        
-        it "can use if in proc" $
-          do
-            let f = proc evx ->
-              do
-                x <- (|hEv (\x -> returnA -< ) ()
-                if 
--}
 
 plans = describe "Plan" $
   do
@@ -372,7 +367,17 @@ plans = describe "Plan" $
                        (runProcessA (repeatedly pl))
                        l
         result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
-            
+
+utility =
+  do
+    describe "delay" $
+      do
+        it "delays input" $
+          do
+            runProcessA (arr (\x->(x,x)) >>> first delay >>> arr fst) [0, 1, 2] `shouldBe` [0, 1, 2]
+            runProcessA (arr (\x->(x,x)) >>> first delay >>> arr snd) [0, 1, 2] `shouldBe` [0, 1, 2]
+
+
 execution = describe "Execution of ProcessA" $
     do
       let
@@ -400,3 +405,4 @@ execution = describe "Execution of ProcessA" $
           let
               (x, _) = runKI (stepRun now2) 1
           x `shouldBe` ([]::[Int])
+

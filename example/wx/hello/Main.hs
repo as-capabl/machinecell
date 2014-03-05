@@ -38,23 +38,19 @@ data MyForm a b c = MyForm {
 machine = proc world ->
   do
     initMsg <- onInit -< world
-    form <- P.once (arrIO0 setup) -< initMsg
+    (
+      do
+        P.anyTime (arrIO0 setup) -< initMsg
 
-    case form 
-      of
-        Nothing -> 
-            P.pass -< P.NoEvent
+      `P.passRecent` \(MyForm f btnDlg btnQuit) ->
+      do    
+        dialogMsg <- onCommand -< (world, btnDlg)
+        P.anyTime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
+               -< const f `fmap` dialogMsg
 
-        Just (MyForm f btnDlg btnQuit) ->
-          do    
-            dialogMsg <- onCommand -< (world, btnDlg)
-            P.anyTime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
-                 -< const f `fmap` dialogMsg
-
-            quitMsg <- onCommand -< (world, btnQuit)
-            P.anyTime (arrIO Wx.close) -< const f `fmap` quitMsg
-
-            P.pass -< P.NoEvent
+        quitMsg <- onCommand -< (world, btnQuit)
+        P.anyTime (arrIO Wx.close) -< const f `fmap` quitMsg
+      )
 
   where
     setup = 

@@ -7,6 +7,7 @@
 module
     Control.Arrow.Machine.Event 
       (
+        Occasional (..),
         Event (..), 
         hEv, 
         hEv', 
@@ -24,7 +25,27 @@ import Control.Arrow
 import Control.Applicative (Applicative, pure, (<*>))
 
 
+class 
+    Occasional a
+  where
+    noEvent :: a
+    end :: a
+    isNoEvent :: a -> Bool
+    isEnd :: a -> Bool
+    isOccasion :: a -> Bool
+    isOccasion x = not (isNoEvent x) && not (isEnd x)
+
 data Event a = Event a | NoEvent | End deriving (Eq, Show)
+
+instance 
+    Occasional (Event a)
+  where
+    noEvent = NoEvent
+    end = End
+    isNoEvent NoEvent = True
+    isNoEvent _ = False
+    isEnd End = True
+    isEnd _ = False
 
 hEv :: ArrowApply a => a (e,b) c -> a e c -> a (e, Event b) c
 hEv f1 f2 = proc (e, ev) ->

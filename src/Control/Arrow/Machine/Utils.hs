@@ -26,22 +26,21 @@ import Control.Arrow.Machine.Detail
 import qualified Control.Arrow.Machine.Plan as Pl
 
 delay :: ArrowApply a => ProcessA a (Event b) (Event b)
-delay = toProcessA $ Mc.construct $
-    do
-      x <- awaitA
-      go x
+delay = toProcessA delayImpl >>> arr (fromEvent NoEvent)
   where
-    go x = 
+    delayImpl = Mc.repeatedly $
       do
-        x2 <- awaitA
-        Mc.yield x
-        go x2
+        x <- awaitA
+        Mc.yield $ NoEvent
+        Mc.yield $ Event x
 
+
+{-
 hold :: ArrowApply a => b -> ProcessA a (Event b) b
 hold init = ProcessA $ holdImpl init
 
 
-holdImpl :: ArrowApply a => b -> ProcessA_ a (Maybe b, d) t -> ProcessA_ a (Maybe (Event b), d) t
+holdImpl :: ArrowApply a => b -> ProcessA_ a t (Maybe (Event b), d) -> ProcessA_ a  t (Maybe b, d)
 holdImpl init (ProcessA_ pre post mc) = 
         ProcessA_ 
            (pre' pre) 
@@ -78,7 +77,7 @@ holdImpl init (ProcessA_ pre post mc) =
           (mc' pre held r0 ff)
     mc' pre held r (Mc.Yield q fc) = 
         Mc.Yield (Event q, r) (mc' pre held r fc)
-
+-}
 sense :: (ArrowApply a, Eq b) =>
          ProcessA a b (Event b)
 sense = arr Event >>> toProcessA (Mc.construct (mc Nothing))
@@ -91,7 +90,7 @@ sense = arr Event >>> toProcessA (Mc.construct (mc Nothing))
         if differs then Mc.yield x else return ()
         mc (Just x)
 
-
+{-
 once :: ArrowApply a =>
         a b c ->
         ProcessA a (Event b) (Maybe c)
@@ -102,6 +101,7 @@ once action = toProcessA go >>> hold Nothing
         ret <- Mc.request action
         Mc.yield $ Just ret
         forever $ Mc.request (arr id)
+-}
 
 
 anyTime :: ArrowApply a =>
@@ -131,7 +131,7 @@ pass :: ArrowApply a =>
           ProcessA a (Event b) (Event b)
 pass = filter (arr (const True))
 
-
+{-
 accumulate :: (ArrowApply a, ArrowLoop a) => 
               (c->b->c) -> c -> ProcessA a (Event b) c
 accumulate f init = proc evx -> 
@@ -140,7 +140,34 @@ accumulate f init = proc evx ->
       current <- hold init <<< delay -< next
       next <- returnA -< f current `fmap` evx
     returnA -< current
+-}
 
+--
+-- ローカルBehavior
+--
+infixr 9 `passRecent`
+
+passRecent :: (ArrowApply a, Occasional o) =>
+              ProcessA a e (Event b) ->
+              ProcessA a (e, b) o ->
+              ProcessA a e o
+
+passRecent af ag = proc e ->
+  do
+    new <- af -< e
+    val <- toProcessA (Mc.construct $ corePlan NoEvent) -< Event (new, e)
+    case val
+      of
+        Event b -> ag -< (e, b)
+        NoEvent -> returnA -< noEvent
+        End -> returnA -< end
+  where
+    corePlan evPrev = 
+      do
+        (evCur, _) <- awaitA
+        let evNew = case evCur of {Event _ -> evCur; _ -> evPrev}
+        evMaybe (return ()) Mc.yield evNew
+        corePlan evNew
 
 --
 -- ステップ実行
