@@ -91,6 +91,17 @@ basics =
             in
               x `shouldBe` ([], [3])
 
+        it "has side-effect" $
+          let
+              l = [1000]
+              doubler = mkProc $ PgDouble PgNop
+              pusher = mkProc $ PgPush PgNop
+              a = pusher >>> doubler >>> (arr $ fmap (+1)) >>> 
+                  pusher >>> (arr $ fmap (+1)) >>> pusher
+              x = stateProc a l
+            in
+              x `shouldBe` ([1002, 1002], reverse [1000,1001,1002,1001,1002])
+
 rules =
   do
     describe "ProcessA as Category" $
