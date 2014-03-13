@@ -50,7 +50,7 @@ runKI a x = runIdentity (runKleisli a x)
 
 
 -- main = hspec $ do {basics; rules; loops; choice; plans; utility; execution}
-main = hspec $ do {basics; rules; loops; utility; choice; plans; execution}
+main = hspec $ do {basics; rules}
 
 basics =
   do
@@ -77,19 +77,26 @@ basics =
               -- ProcessAによる等価な書き方
               resultA = runProcessA (toProcessA process) l
 
-            result `shouldBe` resultA
+            resultA `shouldBe` result
 
 
         it "has stop state" $
           let
+              -- 入力1度につき同じ値を2回出力する
               a2 = mkProc $ PgDouble PgNop
-              a3 = mkProc $ PgPush PgStop
+              -- 入力値をStateのリストの先頭にPushする副作用を行い、同じ値を出力する
+              a3 = mkProc $ PgPush PgNop
+              -- 一度だけ入力をそのまま出力し、すぐに停止する
+              a4 = toProcessA $ Mc.construct $ awaitA >>= Mc.yield
+
               l = [3, 3]
 
-              x = stateProc (a2 >>> a3)
+              x = stateProc (a2 >>> a3 >>> a4)
                    (l::[Int])
             in
-              x `shouldBe` ([], [3])
+              -- 最後尾のMachineが停止した時点で処理を停止するが、
+              -- 既にa2が出力した値の副作用は処理する
+              x `shouldBe` ([3], [3, 3])
 
         it "has side-effect" $
           let
@@ -204,6 +211,7 @@ rules =
             in
               x1 == x2
 
+{-
 loops =
   do
     describe "ProcessA as ArrowLoop" $
@@ -383,3 +391,4 @@ execution = describe "Execution of ProcessA" $
               (x, _) = runKI (stepRun now2) 1
           x `shouldBe` ([]::[Int])
 
+-}

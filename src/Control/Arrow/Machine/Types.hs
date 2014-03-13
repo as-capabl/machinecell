@@ -20,6 +20,114 @@ import Data.Maybe
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Detail
 
+
+data
+    ProcessA a b c
+  where
+    Pure :: (b->c) -> ProcessA a b c
+    Machine :: Mc.Machine (a b) c -> ProcessA a (Event b, d) (Event c, d)
+    Concat :: ProcessA a b d -> ProcessA a d c -> ProcessA a b c
+
+
+toProcessA :: ArrowApply a => Mc.Machine (a b) c -> ProcessA a (Event b) (Event c)
+toProcessA mc = arr (\x -> (x, ())) >>> Machine mc >>> arr fst
+
+instance
+    ArrowApply a => Cat.Category (ProcessA a)
+  where
+    id = Pure id
+    g . f = Concat f g
+
+instance 
+    ArrowApply a => Arrow (ProcessA a)
+  where
+    arr = Pure
+
+    first (Pure f) = Pure $ first f
+    first (Machine mc) = arr assoc >>> Machine mc >>> arr unassoc
+      where
+        assoc ((evx, d1), d2) = (evx, (d1, d2))
+        unassoc (evx, (d1, d2)) = ((evx, d1), d2)
+    first (Concat f g) = first f >>> first g
+
+feed :: ArrowApply a => Bool -> ProcessA a b c -> a b (c, ProcessA a b c, Bool)
+
+feed ex pa@(Pure f) = arr (\x -> (f x, pa, ex))
+
+feed True pa@(Machine (Mc.Await fc f ff)) = proc (evx, d) ->
+  do
+    (| hEv' 
+        (\x -> 
+          do
+            y <- f -< x
+            oneYield True d (fc y) -<< ())
+        (returnA -< ((NoEvent, d), pa, False))
+        (oneYield True d ff -<< ())
+      |) evx
+
+feed ex (Machine mc) = proc (_, d) ->
+  do
+    oneYield ex d mc -<< ()
+
+feed ex (Concat pa pb) = proc x ->
+  do
+    (r1, pa', ex1) <- feed ex pa -< x
+    (r2, pb', ex2) <- feed ex1 pb -<< r1
+    returnA -< (r2, Concat pa' pb', ex2)
+
+oneYield ex d (Mc.Yield y fc) = proc _ ->
+    returnA -< ((Event y, d), Machine fc, True)
+
+oneYield ex d Mc.Stop = proc _ ->
+    returnA -< ((End, d), Machine Mc.Stop, ex)
+
+oneYield ex d mc = proc _ ->
+    returnA -< ((NoEvent, d), Machine mc, ex)
+
+
+runProcessA :: ArrowApply a => ProcessA a (Event b) (Event c) -> a [b] [c]
+runProcessA pa = proc xs -> 
+  do
+    ys <- go False pa xs id -<< ()
+    returnA -< ys []
+  where
+    go True pa [] ys = arr $ const ys
+
+    go False pa [] ys = proc _ ->
+      do
+        (y, pa', ex') <- feed False pa -< End
+        react y ex' pa' [] ys -<< ()
+
+    go ex pa (x:xs) ys = proc _ ->
+      do
+        let (evx, xs') = if ex then (Event x, xs) else (NoEvent, x:xs)
+        (y, pa', ex') <- feed ex pa -< evx
+        react y ex pa' xs' ys -<< ()
+    
+    react End ex pa xs ys =
+      do
+        go (not ex) pa [] ys
+
+    react (Event y) ex pa xs ys =
+        go (not ex) pa xs (\cont -> ys (y:cont))
+
+    react NoEvent ex pa xs ys =
+        go (not ex) pa xs ys
+
+{-
+    first (ProcessA f) = ProcessA $ \prdc -> unassocA $ f (assocA prdc)
+      where
+        assocA (ProcessA_ pre post mc) = ProcessA_ pre (assoc . post) mc
+        unassocA (ProcessA_ pre post mc) = ProcessA_ pre (unassoc . post) mc
+
+        assoc (Just (x, y), z) = (Just x, (Just y, z))
+        assoc (Nothing, z) = (Nothing, (Nothing, z))
+
+        unassoc (Just x, (Just y, z)) = (Just (x, y), z)
+        unassoc (_, (_, z)) = (Nothing, z)
+-}
+
+{-
 traceMc = const id
 --traceMc = trace
 
@@ -160,3 +268,4 @@ instance
         sw (_, Right (p, d)) = ((Nothing, p), d)
 
 
+-}

@@ -7,11 +7,11 @@
 module
     Control.Arrow.Machine.Detail 
       (
-         ProcessA_(..), 
+{-         ProcessA_(..), 
          runProcessA_, 
          concatenate,
          feedTo,
-         loopProcessA_
+         loopProcessA_-}
       )
 where
 
@@ -25,6 +25,7 @@ import Debug.Trace
 
 import Control.Arrow.Machine.Event
 
+{-
 traceMc = const id
 --traceMc = trace
 
@@ -355,4 +356,4 @@ restYield pureLoop b (Mc.Yield x mc') =
         (Mc.Yield c . yields, mcRet)
 
 restYield _ _ mc = (id, mc)
-
+-}

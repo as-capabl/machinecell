@@ -25,6 +25,11 @@ import Control.Arrow.Machine.Detail
 
 import qualified Control.Arrow.Machine.Plan as Pl
 
+
+awaitA :: Arrow a => Mc.Plan c (a b) b
+awaitA = Mc.request $ Cat.id
+
+
 delay :: ArrowApply a => ProcessA a (Event b) (Event b)
 delay = toProcessA delayImpl >>> arr (fromEvent NoEvent)
   where
@@ -34,7 +39,7 @@ delay = toProcessA delayImpl >>> arr (fromEvent NoEvent)
         Mc.yield $ NoEvent
         Mc.yield $ Event x
 
-
+{-
 {-
 hold :: ArrowApply a => b -> ProcessA a (Event b) b
 hold init = ProcessA $ holdImpl init
@@ -245,3 +250,4 @@ isStop _ = False
         holder pre held
 -}        
   
+-}

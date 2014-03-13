@@ -54,13 +54,13 @@ mkProc :: ProcGen
 
 mkProc PgNop = Cat.id
 
-mkProc (PgPush next) = mc >>> mkProc next
+mkProc (PgPush next) = toProcessA mc >>> mkProc next
   where
-    mc = repeatedly $
+    mc = Mc.repeatedly $
        do
-         y <- awaits
-              (\x -> do{ modify (\xs -> x:xs); return x})
-         yield y
+         y <- Mc.request $ 
+              Kleisli (\x -> do{ modify (\xs -> x:xs); return x})
+         Mc.yield y
 
 mkProc (PgPop (fx, fy) fz) =
     toProcessA mc >>> arr sp >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
@@ -105,6 +105,7 @@ mkProcJ :: ProcJoin -> MyProcT (Event Int, Event Int) (Event Int)
 
 mkProcJ (PjFst pg) = arr fst
 mkProcJ (PjSnd pg) = arr snd
+
 
 stateProc a i = 
     runState mx []
