@@ -83,6 +83,7 @@ holdImpl init (ProcessA_ pre post mc) =
     mc' pre held r (Mc.Yield q fc) = 
         Mc.Yield (Event q, r) (mc' pre held r fc)
 -}
+-}
 sense :: (ArrowApply a, Eq b) =>
          ProcessA a b (Event b)
 sense = arr Event >>> toProcessA (Mc.construct (mc Nothing))
@@ -94,6 +95,7 @@ sense = arr Event >>> toProcessA (Mc.construct (mc Nothing))
 
         if differs then Mc.yield x else return ()
         mc (Just x)
+
 
 {-
 once :: ArrowApply a =>
@@ -180,7 +182,7 @@ withRecent :: (ArrowApply a, Occasional o) =>
 withRecent af = proc (e, evb) ->
     (returnA -< evb) `passRecent` (\b -> af -< (e, b))
 
-
+{-
 variable :: (ArrowApply a, ArrowLoop a, Occasional o) =>
             ProcessA a e b ->
             ProcessA a (e, b) (o, Event b) ->
@@ -209,45 +211,48 @@ successive af ag = proc e ->
         ag -< e
       else
         returnA -< x
-
+-}
 ---
 --- ステップ実行
 ---
-type Running a b c = ProcessA_ a b c
+type Running a b c = ProcessA a b c
 
 startRun :: Arrow a =>
              ProcessA a (Event b) (Event c) ->
-             ProcessA_ a (Event b) (Event c)
-startRun = resolveCPS
+             Running a (Event b) (Event c)
+startRun = id
+
 stepRun :: ArrowApply a =>
-            ProcessA_ a (Event b) (Event c) ->
-            a b ([c], ProcessA_ a (Event b) (Event c))
-stepRun (ProcessA_ pre post mc) = proc x ->
+            Running a (Event b) (Event c) ->
+            a b ([c], Running a (Event b) (Event c))
+stepRun pa = proc x ->
   do
-    let
-        (evp, r) = pre (Event x)
-    (ret, mc') <- feedTo id mc -< evp
-    let
-        evcs = map (\q -> post (q, r)) ret
-        cs = evcs >>= evMaybe mzero return
-    returnA -< (cs, ProcessA_ pre post mc')
+    (ys, pa') <- go Feed pa (Event x) id -<< ()
+    returnA -< (ys [], pa')
+  where
+    go Suspend pa _ ys = proc _ ->
+        returnA -< (ys, pa)
 
+    go ph pa evx ys = proc _ ->
+      do
+        (y, pa', ph') <- step ph pa -< evx
+        react y ph' pa' ys -<< ()
+    
+    react End ph pa ys =
+      do
+        go (adv ph) pa End ys
 
+    react (Event y) ph pa ys =
+        go (adv ph) pa NoEvent (\cont -> ys (y:cont))
 
+    react NoEvent ph pa ys =
+        go (adv ph) pa NoEvent ys
+
+    adv Feed = Sweep
+    adv Suspend = Suspend
+
+{-
 isStop :: ProcessA_ a b c -> Bool
 isStop (ProcessA_ pre post Mc.Stop) = True
 isStop _ = False
-
-{-
-        Mc.construct (holder pre x) ~> Mc.fit first mc
-    holder pre xprev = 
-      do
-        (evx, d) <- Mc.await
-        held <- case evx of 
-          Event x -> x
-          _ -> xprev
-        Mc.yield $ pre (held, d)
-        holder pre held
--}        
-  
 -}

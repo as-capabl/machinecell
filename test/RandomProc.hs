@@ -10,6 +10,10 @@ import Control.Monad.State
 import Control.Monad
 import Control.Monad.Trans
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
+import Data.Maybe (fromJust)
+import System.Timeout (timeout)
+import Control.DeepSeq (deepseq)
+import System.IO.Unsafe (unsafePerformIO)
 
 
 data ProcJoin = PjFst ProcGen | PjSnd ProcGen | PjSum ProcGen
@@ -109,5 +113,14 @@ mkProcJ (PjSnd pg) = arr snd
 
 stateProc a i = 
     runState mx []
+{-
+    unsafePerformIO $ 
+      do
+        x <- timeout 10000 $
+          do
+            let x = runState mx []
+            deepseq x $ return x
+        return (fromJust x)
+-}
   where
     mx = runKleisli (runProcessA a) i

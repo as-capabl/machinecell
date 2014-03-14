@@ -15,7 +15,7 @@ SOURCES=../src/Control/Arrow/Machine/Utils.hs \
 tests: bin/test
 	bin/test
 
-bin/test: Main.hs $(SOURCES)
+bin/test: Main.hs RandomProc.hs $(SOURCES)
 	ghc -o $@ $(COMMON_OPTIONS) Main.hs 
 
 .PHONY: ghci setenv tests

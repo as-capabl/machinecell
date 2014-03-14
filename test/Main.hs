@@ -10,7 +10,7 @@ where
 
 import Data.Maybe (fromMaybe)
 import Control.Arrow.Machine
-import Control.Applicative ((<$>), (<*>))
+import Control.Applicative ((<$>), (<*>), (<$))
 import qualified Data.Machine as Mc
 import Data.Machine ((<~))
 import qualified Control.Category as Cat
@@ -49,8 +49,7 @@ de evxy = (fst <$> evxy, snd <$> evxy)
 runKI a x = runIdentity (runKleisli a x)
 
 
--- main = hspec $ do {basics; rules; loops; choice; plans; utility; execution}
-main = hspec $ do {basics; rules}
+main = hspec $ do {basics; rules; loops; choice; plans; utility; execution}
 
 basics =
   do
@@ -109,6 +108,19 @@ basics =
             in
               x `shouldBe` ([1002, 1002], reverse [1000,1001,1002,1001,1002])
 
+        it "never spoils any FEED" $
+          let
+              doubler = mkProc $ PgDouble PgNop
+              counter = toProcessA $ Mc.construct $ counterDo 1
+              counterDo n = 
+                do
+                  x <- awaitA
+                  Mc.yield $ n * 100 + x
+                  counterDo (n+1)
+              x = stateProc (doubler >>> doubler >>> counter) [1,2]
+            in
+              fst x `shouldBe` [101, 201, 301, 401, 502, 602, 702, 802]
+
 rules =
   do
     describe "ProcessA as Category" $
@@ -122,7 +134,14 @@ rules =
               r2 = stateProc (af >>> (ag >>> ah)) l
             in
               r1 == r2
-
+{-
+1) ProcessA as Category has asocciative composition
+Falsifiable (after 28 tests and 7 shrinks): 
+PgDouble (PgDouble (PgPush (PgDouble (PgPop (PgNop,PgPop (PgStop,PgIncl (PgIncl PgNop)) (PjFst PgStop)) (PjFst (PgOdd (PgDouble PgNop)))))))
+PgPop (PgPop (PgDouble (PgPush (PgDouble PgStop)),PgIncl PgNop) (PjSnd PgNop),PgNop) (PjFst (PgPop (PgNop,PgNop) (PjSnd PgNop)))
+PgPop (PgNop,PgNop) (PjFst PgNop)
+[0]
+-}
         prop "has identity" $ \f g l ->
           let
               af = mkProc f
@@ -211,7 +230,6 @@ rules =
             in
               x1 == x2
 
-{-
 loops =
   do
     describe "ProcessA as ArrowLoop" $
@@ -220,8 +238,8 @@ loops =
           let
               a = proc x ->
                 do
-                  rec l <- returnA -< (:l) $ fromEvent 0 x
-                  returnA -< Event l
+                  rec l <- returnA -< evMaybe [] (:l) x
+                  returnA -< l <$ x
               result = fst $ stateProc a [2, 5]
             in
               take 3 (result!!1) `shouldBe` [5, 5, 5]
@@ -237,7 +255,6 @@ loops =
               result = fst $ stateProc a [2, 5]
             in
               take 3 (result!!1) `shouldBe` [5, 5, 5]
-
 {-
         it "the last value is valid." $
           do
@@ -287,7 +304,6 @@ loops =
                    (l::[Int])
             in
               x1 == x2
-
 
 choice =
   do
@@ -353,6 +369,7 @@ plans = describe "Plan" $
                        l
         result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
 
+
 utility =
   do
     describe "delay" $
@@ -361,6 +378,7 @@ utility =
           do
             runProcessA (arr (\x->(x,x)) >>> first delay >>> arr fst) [0, 1, 2] `shouldBe` [0, 1, 2]
             runProcessA (arr (\x->(x,x)) >>> first delay >>> arr snd) [0, 1, 2] `shouldBe` [0, 1, 2]
+
 
 
 execution = describe "Execution of ProcessA" $
@@ -391,4 +409,4 @@ execution = describe "Execution of ProcessA" $
               (x, _) = runKI (stepRun now2) 1
           x `shouldBe` ([]::[Int])
 
--}
+

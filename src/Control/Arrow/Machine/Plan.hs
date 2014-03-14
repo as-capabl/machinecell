@@ -24,7 +24,7 @@ import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Detail
 
-{-
+
 data PlanF i o m a where
   AwaitPF :: (i -> m a) -> PlanF i o m a
   YieldPF :: o -> a -> PlanF i o m a
@@ -82,4 +82,4 @@ repeatIt orig (F.Pure x) = repeatIt orig orig
 repeatIt orig (F.Free pf) = F.Free $ fmap (repeatIt orig) pf
 
 
--}
+
