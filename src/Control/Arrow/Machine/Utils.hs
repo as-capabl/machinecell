@@ -12,11 +12,11 @@ import Prelude hiding (filter)
 
 import qualified Data.Machine as Mc
 import Data.Machine ((~>))
+import Data.Monoid (mappend)
 import qualified Control.Category as Cat
 import Control.Monad (liftM, mzero, forever)
 import Control.Arrow
 import Control.Applicative
-import Control.Monad.Trans
 import Debug.Trace
 
 import Control.Arrow.Machine.Types
@@ -39,63 +39,30 @@ delay = toProcessA delayImpl >>> arr (fromEvent NoEvent)
         Mc.yield $ NoEvent
         Mc.yield $ Event x
 
-{-
-{-
 hold :: ArrowApply a => b -> ProcessA a (Event b) b
-hold init = ProcessA $ holdImpl init
+hold old = ProcessA $ proc (ph, evx) ->
+  do
+    let new = fromEvent old evx
+    returnA -< (ph `mappend` Suspend, new, hold new)
 
 
-holdImpl :: ArrowApply a => b -> ProcessA_ a t (Maybe (Event b), d) -> ProcessA_ a  t (Maybe b, d)
-holdImpl init (ProcessA_ pre post mc) = 
-        ProcessA_ 
-           (pre' pre) 
-           (post' post) 
-           (mc' pre init undefined mc)
-  where
-    -- pre' pre arg = (pre <$> ((,) <$> fst arg <*> Event (snd arg)) , ())
-    pre' pre arg = 
-        case arg 
-           of
-             (Just x, y) ->
-                 (Event (x, y), snd $ pre (Just (evMaybe init id x), y))
-             (Nothing, y) ->
-                 (NoEvent, snd $ pre (Nothing, y))
-
-    post' post (arg, r) = 
-        evMaybe (post (NoEvent, r)) post arg -- 極めて怪しい
-
-    mc' pre held _ (Mc.Stop) = 
-        Mc.Stop
-    mc' pre held r0 mc@(Mc.Await fc f ff) = 
-        Mc.Await 
-          id
-          (proc (evx, d) ->
-            do
-              x <- arr (evMaybe held id) -< evx
-              (evp, r) <- arr pre -< (Just x, d)
-              (| hEv'
-                  (\p -> do {y <- f -< p; returnA -< mc' pre x r (fc y)})
-                  (returnA -< mc' pre held r0 mc)
-                  (returnA -< Mc.Stop) --(returnA -< mc' pre held r0 mc)
-                |)
-                  evp)
-          (mc' pre held r0 ff)
-    mc' pre held r (Mc.Yield q fc) = 
-        Mc.Yield (Event q, r) (mc' pre held r fc)
--}
--}
 sense :: (ArrowApply a, Eq b) =>
          ProcessA a b (Event b)
-sense = arr Event >>> toProcessA (Mc.construct (mc Nothing))
+sense = ProcessA $ impl Nothing 
   where
-    mc (mayPrev) =
+    impl mvx = proc (ph, x) -> 
       do
-        x <- awaitA
-        let differs = maybe True (not.(x ==)) mayPrev
+        let equals = maybe False (==x) mvx
+        returnA -< if not equals 
+          then 
+            (Feed, Event x, ProcessA $ impl (Just x))
+          else
+            (ph `mappend` Suspend, NoEvent, ProcessA $ impl mvx)
+    
 
-        if differs then Mc.yield x else return ()
-        mc (Just x)
-
+fork :: (ArrowApply a) =>
+        ProcessA a (Event [b]) (Event b)
+fork = toProcessA $ Mc.repeatedly $ awaitA >>= mapM Mc.yield
 
 {-
 once :: ArrowApply a =>
@@ -161,20 +128,11 @@ passRecent :: (ArrowApply a, Occasional o) =>
 
 passRecent af ag = proc e ->
   do
-    new <- af -< e
-    val <- toProcessA (Mc.construct $ corePlan NoEvent) -< Event (new, e)
-    case val
-      of
-        Event b -> ag -< (e, b)
-        NoEvent -> returnA -< noEvent
-        End -> returnA -< end
-  where
-    corePlan evPrev = 
-      do
-        (evCur, _) <- awaitA
-        let evNew = case evCur of {Event _ -> evCur; _ -> evPrev}
-        evMaybe (return ()) Mc.yield evNew
-        corePlan evNew
+    evx <- af -< e
+    mvx <- hold Nothing -< Just <$> evx
+    case mvx of
+      Just x -> ag -< (e, x)
+      _ -> returnA -< noEvent
 
 withRecent :: (ArrowApply a, Occasional o) =>
               ProcessA a (e, b) o ->
@@ -235,7 +193,7 @@ stepRun pa = proc x ->
 
     go ph pa evx ys = proc _ ->
       do
-        (y, pa', ph') <- step ph pa -< evx
+        (ph', y, pa') <- step pa -< (ph, evx)
         react y ph' pa' ys -<< ()
     
     react End ph pa ys =

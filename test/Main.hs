@@ -121,6 +121,19 @@ basics =
             in
               fst x `shouldBe` [101, 201, 301, 401, 502, 602, 702, 802]
 
+        prop "each path can have independent number of events" $ \l ->
+          let
+              split2' (Event (x, y)) = (Event x, Event y)
+              split2' NoEvent = (NoEvent, NoEvent)
+              split2' End = (End, End)
+              gen = arr (fmap $ \x -> [x, x]) >>> fork >>> arr split2'
+              r1 = runKI (runProcessA (gen >>> arr fst)) (l::[(Int, [Int])])
+              r2 = runKI (runProcessA (gen >>> second (fork >>> pass) >>> arr fst)) 
+                   (l::[(Int, [Int])])
+            in
+              r1 == r2
+
+
 rules =
   do
     describe "ProcessA as Category" $
@@ -255,7 +268,7 @@ loops =
               result = fst $ stateProc a [2, 5]
             in
               take 3 (result!!1) `shouldBe` [5, 5, 5]
-{-
+
         it "the last value is valid." $
           do
             let
@@ -270,7 +283,7 @@ loops =
                         z <- hold 0 <<< delay -< y
                     returnA -< y
             runProcessA pa [1, 10] `shouldBe` [1, 2, 12, 24]
--}
+
     describe "Rules for ArrowLoop" $
       do
         let
