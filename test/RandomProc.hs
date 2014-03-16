@@ -58,26 +58,23 @@ mkProc :: ProcGen
 
 mkProc PgNop = Cat.id
 
-mkProc (PgPush next) = toProcessA mc >>> mkProc next
+mkProc (PgPush next) = mc >>> mkProc next
   where
-    mc = Mc.repeatedly $
+    mc = repeatedly $
        do
-         y <- Mc.request $ 
-              Kleisli (\x -> do{ modify (\xs -> x:xs); return x})
-         Mc.yield y
+         x <- await
+         lift $ modify (\xs -> x:xs)
+         yield x
 
 mkProc (PgPop (fx, fy) fz) =
-    toProcessA mc >>> arr sp >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
+    mc >>> arr sp >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
   where
-    mc = Mc.repeatedly $
+    mc = repeatedly $
        do
-         z <- Mc.request $ 
-              Kleisli (\x -> 
-                do
-                  ys <- get
-                  modify pop
-                  return (x, head_ ys))
-         Mc.yield z
+         x <- await
+         ys <- lift $ get
+         lift $ modify pop
+         yield (x, head_ ys)
     pop (x:xs) = xs
     pop [] = []
     head_ (x:xs) = x
@@ -86,20 +83,20 @@ mkProc (PgPop (fx, fy) fz) =
     sp NoEvent = (NoEvent, NoEvent)
     sp End = (End, End)
 
-mkProc (PgOdd next) = toProcessA mc >>> mkProc next
+mkProc (PgOdd next) = mc >>> mkProc next
   where
-    mc = Mc.repeatedly $
+    mc = repeatedly $
       do
-        y <- awaitA
-        if y `mod` 2 == 1 then Mc.yield y else return ()
+        y <- await
+        if y `mod` 2 == 1 then yield y else return ()
 
-mkProc (PgDouble next) = toProcessA mc >>> mkProc next
+mkProc (PgDouble next) = mc >>> mkProc next
   where
-    mc = Mc.repeatedly $
+    mc = repeatedly $
       do
-        y <- awaitA
-        Mc.yield y
-        Mc.yield y
+        y <- await
+        yield y
+        yield y
 
 mkProc (PgIncl next) = arr (fmap (+1)) >>> mkProc next
 

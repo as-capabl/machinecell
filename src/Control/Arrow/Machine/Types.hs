@@ -37,6 +37,14 @@ data ProcessA a b c = ProcessA {
       step :: a (Phase, b) (Phase, c, ProcessA a b c) 
     }
 
+fit :: (Arrow a, Arrow a') => 
+       (forall p q. a p q -> a' p q) -> 
+       ProcessA a b c -> ProcessA a' b c
+fit f (ProcessA af) = ProcessA $ f af >>> arr mod
+  where
+    mod (ph, y, next) = (ph, y, fit f next)
+
+
 
 toProcessA :: ArrowApply a => 
               Mc.Machine (a b) c -> 
