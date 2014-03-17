@@ -13,6 +13,8 @@ module
         hEv', 
         evMaybe,
         fromEvent,
+        split,
+        join,
         split2,
         join2
       )
@@ -111,13 +113,25 @@ filterEvent cond ev@(Event x) = condEvent (cond x) ev
 filterEvent _ ev = ev
 
 -- TODO: テスト
+split :: (Arrow a, Occasional b) => a (Event b) b
+split = arr go
+  where
+    go (Event x) = x
+    go NoEvent = noEvent
+    go End = end
+
+join :: (Arrow a, Occasional b) => a b (Event b)
+join = arr go
+  where
+    go x 
+       | isEnd x = End
+       | isNoEvent x = NoEvent
+       | otherwise = Event x
+
+
+
 split2 :: Event (Event a, Event b) -> (Event a, Event b)
-split2 (Event tp) = tp
-split2 NoEvent = (NoEvent, NoEvent)
-split2 End = (End, End)
+split2 = split
 
 join2 :: (Event a, Event b) -> Event (Event a, Event b)
-join2 (End, _) = End
-join2 (_, End) = End
-join2 (NoEvent, NoEvent) = NoEvent
-join2 tp = Event tp
+join2 = join

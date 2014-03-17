@@ -15,6 +15,7 @@ import Data.Machine ((~>))
 import Data.Monoid (mappend)
 import qualified Control.Category as Cat
 import Control.Monad (liftM, mzero, forever)
+import Control.Monad.Trans
 import Control.Arrow
 import Control.Applicative
 import Debug.Trace
@@ -29,15 +30,30 @@ import qualified Control.Arrow.Machine.Plan as Pl
 awaitA :: Arrow a => Mc.Plan c (a b) b
 awaitA = Mc.request $ Cat.id
 
+kleisli :: ArrowApply a => a b c -> Kleisli (ArrowMonad a) b c
+kleisli af = Kleisli $ \x -> ArrowMonad $ arr (const x) >>> af
 
-delay :: ArrowApply a => ProcessA a (Event b) (Event b)
-delay = toProcessA delayImpl >>> arr (fromEvent NoEvent)
+unKleisli :: ArrowApply a => Kleisli (ArrowMonad a) b c -> a b c
+unKleisli (Kleisli f) = proc x -> case f x of {ArrowMonad af -> af} -<< ()
+
+
+wye :: ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
+wye = join >>> fit unKleisli (Pl.repeatedly pl)
   where
-    delayImpl = Mc.repeatedly $
+    pl =
       do
-        x <- awaitA
-        Mc.yield $ NoEvent
-        Mc.yield $ Event x
+        (evx, evy) <- Pl.await
+        evMaybe (return ()) (Pl.yield . Left) evx
+        evMaybe (return ()) (Pl.yield . Right) evy
+
+delay :: (ArrowApply a, Occasional b) => ProcessA a b b
+delay = join >>> fit unKleisli delayImpl >>> split
+  where
+    delayImpl = Pl.repeatedly $
+      do
+        x <- Pl.await
+        Pl.yield noEvent
+        Pl.yield x
 
 hold :: ArrowApply a => b -> ProcessA a (Event b) b
 hold old = ProcessA $ proc (ph, evx) ->
@@ -45,10 +61,15 @@ hold old = ProcessA $ proc (ph, evx) ->
     let new = fromEvent old evx
     returnA -< (ph `mappend` Suspend, new, hold new)
 
+var :: (ArrowApply a, ArrowLoop a) => b -> ProcessA a (Event (b -> b)) b
+var i = proc f -> 
+  do
+    rec x <- hold i <<< delay -< f <*> Event x
+    returnA -< x
 
-sense :: (ArrowApply a, Eq b) =>
+edge :: (ArrowApply a, Eq b) =>
          ProcessA a b (Event b)
-sense = ProcessA $ impl Nothing 
+edge = ProcessA $ impl Nothing 
   where
     impl mvx = proc (ph, x) -> 
       do
@@ -62,7 +83,8 @@ sense = ProcessA $ impl Nothing
 
 fork :: (ArrowApply a) =>
         ProcessA a (Event [b]) (Event b)
-fork = toProcessA $ Mc.repeatedly $ awaitA >>= mapM Mc.yield
+fork = fit unKleisli $ Pl.repeatedly $ 
+    Pl.await >>= mapM Pl.yield
 
 {-
 once :: ArrowApply a =>
@@ -77,28 +99,26 @@ once action = toProcessA go >>> hold Nothing
         forever $ Mc.request (arr id)
 -}
 
-
 anyTime :: ArrowApply a =>
         a b c ->
         ProcessA a (Event b) (Event c)
-anyTime action = toProcessA go
+anyTime action = fit unKleisli go
   where
-    go = Mc.repeatedly $
+    go = Pl.repeatedly $
       do
-        ret <- Mc.request action
-        Mc.yield ret
+        x <- Pl.await
+        ret <- lift $ (runKleisli $ kleisli action) x
+        Pl.yield ret
 
 
 filter :: ArrowApply a =>
           a b Bool ->
           ProcessA a (Event b) (Event b)
-filter cond = toProcessA $ Mc.repeatedly $
+filter cond = fit unKleisli $ Pl.repeatedly $
   do
-    mayReturn <- Mc.request $ proc x ->
-      do
-        b <- cond -< x
-        returnA -< if b then Just x else Nothing
-    maybe (return ()) Mc.yield mayReturn
+    x <- Pl.await
+    b <- lift $ (runKleisli $ kleisli cond) x
+    if b then Pl.yield x else return ()
 
 
 pass :: ArrowApply a =>

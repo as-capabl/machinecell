@@ -2,13 +2,15 @@ module
     RandomProc
 where
 
+import Prelude hiding (filter)
 import Control.Arrow.Machine
 import Control.Arrow
 import qualified Data.Machine as Mc
 import qualified Control.Category as Cat
-import Control.Monad.State
+import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans
+import Control.Monad.State
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import Data.Maybe (fromJust)
 import System.Timeout (timeout)
@@ -32,7 +34,8 @@ instance
     Arbitrary ProcJoin
   where
     arbitrary = oneof [liftM PjFst arbitrary,
-                      liftM PjSnd arbitrary]
+                      liftM PjSnd arbitrary,
+                      liftM PjSum arbitrary]
 
 instance 
     Arbitrary ProcGen
@@ -67,36 +70,26 @@ mkProc (PgPush next) = mc >>> mkProc next
          yield x
 
 mkProc (PgPop (fx, fy) fz) =
-    mc >>> arr sp >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
+    mc >>> split >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
   where
     mc = repeatedly $
        do
          x <- await
          ys <- lift $ get
-         lift $ modify pop
-         yield (x, head_ ys)
-    pop (x:xs) = xs
-    pop [] = []
-    head_ (x:xs) = x
-    head_ [] = 0
-    sp (Event (x,y)) = (Event x, Event y)
-    sp NoEvent = (NoEvent, NoEvent)
-    sp End = (End, End)
+         case ys 
+           of
+             [] -> 
+                 yield (Event x, NoEvent)
+             (y:yss) -> 
+               do 
+                 lift $ put yss
+                 yield (Event x, Event y)
 
-mkProc (PgOdd next) = mc >>> mkProc next
+mkProc (PgOdd next) = filter (arr cond) >>> mkProc next
   where
-    mc = repeatedly $
-      do
-        y <- await
-        if y `mod` 2 == 1 then yield y else return ()
+    cond x = x `mod` 2 == 1
 
-mkProc (PgDouble next) = mc >>> mkProc next
-  where
-    mc = repeatedly $
-      do
-        y <- await
-        yield y
-        yield y
+mkProc (PgDouble next) = arr (fmap $ take 2 . repeat) >>> fork >>> mkProc next
 
 mkProc (PgIncl next) = arr (fmap (+1)) >>> mkProc next
 
@@ -106,6 +99,9 @@ mkProcJ :: ProcJoin -> MyProcT (Event Int, Event Int) (Event Int)
 
 mkProcJ (PjFst pg) = arr fst
 mkProcJ (PjSnd pg) = arr snd
+mkProcJ (PjSum pg) = arr go
+  where
+    go (evx, evy) = (+) <$> evx <*> evy
 
 
 stateProc a i = 
