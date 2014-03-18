@@ -21,7 +21,6 @@ module
 where
 
 
-import qualified Data.Machine as Mc
 import Control.Monad (liftM)
 import Control.Arrow
 import Control.Applicative (Applicative, pure, (<*>))

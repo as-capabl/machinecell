@@ -12,7 +12,6 @@ where
 
 import qualified Control.Arrow.Machine as P
 import Control.Applicative ((<$>), (<*>))
-import qualified Data.Machine as Mc
 import qualified Control.Category as Cat
 import Control.Arrow
 import Control.Monad.State

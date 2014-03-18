@@ -1,16 +1,23 @@
 machinecell
 ===========
 
-Provides arrow combinations for Machines.
+Arrow based Stream transducer.
 
-Limitation
+Features
 ---------------
-For all machines used in this library,  no `Yield` can appear before any `Aawit`s. This may be corrected by changing the signature of ProcessA from `ProcessA (forall t d. ProcessA_ a (c, d) t -> ProcessA_ a (b, d) t)` to `a (ProcessA_ a (c, d) t) (ProcessA_ a (b, d) t)`
+* Monadic (ArrowApply) side effect
+* N-ary output
+* Coroutine (Plan monad)
+* AFRP-like utilities (hold, edge, switch...)
+
+Status
+---------------
+Experimental.
+This version has performance issue.
+And APIs not fixed.
 
 Running
 ---------------
-    git submodule init
-    git submodule update
     cd test
     make
 

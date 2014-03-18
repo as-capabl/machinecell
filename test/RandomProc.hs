@@ -5,7 +5,6 @@ where
 import Prelude hiding (filter)
 import Control.Arrow.Machine
 import Control.Arrow
-import qualified Data.Machine as Mc
 import qualified Control.Category as Cat
 import Control.Applicative
 import Control.Monad
@@ -89,11 +88,11 @@ mkProc (PgOdd next) = filter (arr cond) >>> mkProc next
   where
     cond x = x `mod` 2 == 1
 
-mkProc (PgDouble next) = arr (fmap $ take 2 . repeat) >>> fork >>> mkProc next
+mkProc (PgDouble next) = arr (fmap $ \x -> [x, x]) >>> fork >>> mkProc next
 
 mkProc (PgIncl next) = arr (fmap (+1)) >>> mkProc next
 
-mkProc (PgStop) = toProcessA Mc.Stop
+mkProc (PgStop) = stopped
 
 mkProcJ :: ProcJoin -> MyProcT (Event Int, Event Int) (Event Int)
 

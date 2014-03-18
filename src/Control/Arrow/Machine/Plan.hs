@@ -6,7 +6,6 @@ module
     Control.Arrow.Machine.Plan
 where
 
-import qualified Data.Machine as Mc
 import qualified Control.Category as Cat
 
 import qualified Control.Monad.Trans.Free as F

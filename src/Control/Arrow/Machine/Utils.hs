@@ -10,8 +10,6 @@ where
 
 import Prelude hiding (filter)
 
-import qualified Data.Machine as Mc
-import Data.Machine ((~>))
 import Data.Monoid (mappend)
 import qualified Control.Category as Cat
 import Control.Monad (liftM, mzero, forever)
@@ -27,8 +25,6 @@ import Control.Arrow.Machine.Detail
 import qualified Control.Arrow.Machine.Plan as Pl
 
 
-awaitA :: Arrow a => Mc.Plan c (a b) b
-awaitA = Mc.request $ Cat.id
 
 kleisli :: ArrowApply a => a b c -> Kleisli (ArrowMonad a) b c
 kleisli af = Kleisli $ \x -> ArrowMonad $ arr (const x) >>> af

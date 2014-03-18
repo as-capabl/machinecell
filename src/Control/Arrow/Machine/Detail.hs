@@ -15,7 +15,6 @@ module
       )
 where
 
-import qualified Data.Machine as Mc
 import qualified Control.Category as Cat
 import Control.Monad (liftM)
 import Control.Arrow

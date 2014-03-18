@@ -1,6 +1,5 @@
 
 import Control.Arrow.Machine
-import qualified Data.Machine as Mc
 import qualified Control.Category as Cat
 import Control.Arrow
 import Control.Monad.State

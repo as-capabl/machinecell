@@ -11,8 +11,6 @@ where
 import Data.Maybe (fromMaybe)
 import Control.Arrow.Machine
 import Control.Applicative ((<$>), (<*>), (<$))
-import qualified Data.Machine as Mc
-import Data.Machine ((<~))
 import qualified Control.Category as Cat
 import Control.Arrow
 import Control.Monad.State
@@ -27,7 +25,7 @@ import RandomProc
 
 
 myProc2 :: ProcessA (Kleisli (State [Int])) (Event Int) (Event Int)
-myProc2 = toProcessA $ Mc.repeatedly core
+myProc2 = repeatedly core
   where
     action x = 
       do 
@@ -35,8 +33,9 @@ myProc2 = toProcessA $ Mc.repeatedly core
         return x
     core = 
       do
-        z <- Mc.request $ Kleisli action
-        Mc.yield `mapM` (take z $ repeat z)
+        x <- await
+        z <- lift $ action x
+        yield `mapM` (take z $ repeat z)
 
 
 -- helper
@@ -55,28 +54,23 @@ basics =
   do
     describe "ProcessA" $
       do
-        it "is wrapper of Ekmett's Machine." $
+        it "is stream transducer." $
           do
             let
               plan = 
                 do
-                  x <- Mc.await
-                  Mc.yield x
-                  Mc.yield (x + 1)
-              process = Mc.repeatedly plan
+                  x <- await
+                  yield x
+                  yield (x + 1)
+              process = repeatedly plan
 
             let
-              l = [1,2,4,8,10]
+              l = [1,2,4]
 
             let
-              -- Machineによる書き方 (runがMonadPlusを要求するのでMaybe)
-              result = fromMaybe [] $ 
-                Mc.run (Mc.supply l process <~ mzero)
+              resultA = runKI (runProcessA process) l
 
-              -- ProcessAによる等価な書き方
-              resultA = runProcessA (toProcessA process) l
-
-            resultA `shouldBe` result
+            resultA `shouldBe` [1, 2, 2, 3, 4, 5]
 
 
         it "has stop state" $
@@ -86,7 +80,7 @@ basics =
               -- 入力値をStateのリストの先頭にPushする副作用を行い、同じ値を出力する
               a3 = mkProc $ PgPush PgNop
               -- 一度だけ入力をそのまま出力し、すぐに停止する
-              a4 = toProcessA $ Mc.construct $ awaitA >>= Mc.yield
+              a4 = construct $ await >>= yield
 
               l = [3, 3]
 
@@ -111,11 +105,11 @@ basics =
         it "never spoils any FEED" $
           let
               doubler = mkProc $ PgDouble PgNop
-              counter = toProcessA $ Mc.construct $ counterDo 1
+              counter = construct $ counterDo 1
               counterDo n = 
                 do
-                  x <- awaitA
-                  Mc.yield $ n * 100 + x
+                  x <- await
+                  yield $ n * 100 + x
                   counterDo (n+1)
               x = stateProc (doubler >>> doubler >>> counter) [1,2]
             in
@@ -259,10 +253,10 @@ loops =
 
         it "can be used with rec statement(macninery)" $
           let
-              mc = Mc.pass Cat.id
+              mc = anyTime Cat.id
               a = proc x ->
                 do
-                  rec l <- toProcessA mc -< (:l') <$> x
+                  rec l <- mc -< (:l') <$> x
                       l' <- returnA -< fromEvent [] l
                   returnA -< l
               result = fst $ stateProc a [2, 5]
@@ -272,17 +266,17 @@ loops =
         it "the last value is valid." $
           do
             let
-                mc = Mc.repeatedly $
+                mc = repeatedly $
                   do
-                    x <- awaitA
-                    Mc.yield x
-                    Mc.yield (x*2)
+                    x <- await
+                    yield x
+                    yield (x*2)
                 pa = proc x ->
                   do
-                    rec y <- toProcessA mc -< (+z) <$> x
+                    rec y <- mc -< (+z) <$> x
                         z <- hold 0 <<< delay -< y
                     returnA -< y
-            runProcessA pa [1, 10] `shouldBe` [1, 2, 12, 24]
+            runKI (runProcessA pa) [1, 10] `shouldBe` [1, 2, 12, 24]
 
     describe "Rules for ArrowLoop" $
       do

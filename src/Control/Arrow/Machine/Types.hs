@@ -5,7 +5,6 @@ module
     Control.Arrow.Machine.Types
 where
 
-import qualified Data.Machine as Mc
 import qualified Control.Category as Cat
 import Data.Monoid
 import Control.Monad (liftM)
@@ -46,46 +45,6 @@ fit f (ProcessA af) = ProcessA $ f af >>> arr mod
 
 
 
-toProcessA :: ArrowApply a => 
-              Mc.Machine (a b) c -> 
-              ProcessA a (Event b) (Event c)
-toProcessA mc = ProcessA $ proc (ph, x) ->
-  do
-    mcStep ph mc -<< x
-
-mcStep :: ArrowApply a => Phase -> Mc.Machine (a b) c -> 
-          a (Event b) (Phase, Event c, ProcessA a (Event b) (Event c))    
-mcStep Feed mc@(Mc.Await fc f ff) = proc evx ->
-  do
-    (| hEv' 
-        (\x -> 
-          do
-            y <- f -< x
-            oneYield Feed (fc y) -<< ())
-        (returnA -< (Feed, NoEvent, toProcessA mc))
-        (oneYield Feed ff -<< ())
-      |) evx
-
-mcStep ph mc = proc _ ->
-  do
-    oneYield ph mc -<< ()
-
-
-oneYield :: ArrowApply a => Phase -> 
-            Mc.Machine (a b) c -> 
-            a () (Phase, Event c, ProcessA a (Event b) (Event c))    
-
-oneYield Suspend mc = proc _ ->
-    returnA -< (Suspend, NoEvent, toProcessA mc)
-
-oneYield ph (Mc.Yield y fc) = proc _ ->
-    returnA -< (Feed, Event y, toProcessA fc)
-
-oneYield ph Mc.Stop = proc _ ->
-    returnA -< (ph `mappend` Suspend, End, toProcessA Mc.Stop)
-
-oneYield ph mc = proc _ ->
-    returnA -< (ph `mappend` Suspend, NoEvent, toProcessA mc)
 
 
 instance
@@ -187,3 +146,7 @@ instance
           do 
             (ph', (y, d'), pa') <- step pa -< (ph, (x, d))
             returnA -< ((ph', y, loop pa'), d')
+
+
+stopped :: (ArrowApply a, Occasional c) => ProcessA a b c
+stopped = arr (const end)
