@@ -68,10 +68,10 @@ construct pl = ProcessA $ proc (ph, evx) ->
                 ff2 <- Kleisli (const $ F.runFreeT (f x)) -<< ()
                 oneYieldPF Feed ff2 -<< ())
             (returnA -< (Feed, NoEvent, construct (await_ f)))
-            (returnA -< (Feed, End, construct stop))
+            (returnA -< (Feed, End, stopped))
            |) evx
 
-    go ph pfr = proc _ ->
+    go ph pfr = proc evx ->        
         oneYieldPF ph pfr -<< ()
 
 oneYieldPF :: Monad m => Phase -> 
@@ -87,7 +87,7 @@ oneYieldPF ph (F.Free (YieldPF x cont)) = proc _ ->
     returnA -< (Feed, Event x, construct cont)
 
 oneYieldPF ph (F.Free (StopPF cont)) = proc _ ->
-    returnA -< (ph `mappend` Suspend, End, construct stop)
+    returnA -< (ph `mappend` Suspend, End, stopped)
 
 oneYieldPF ph (F.Free pf) = proc _ ->
     returnA -< (ph `mappend` Suspend, 
@@ -95,7 +95,7 @@ oneYieldPF ph (F.Free pf) = proc _ ->
                 construct $ F.FreeT $ return $ F.Free pf)
 
 oneYieldPF ph (F.Pure x) = proc _ ->
-    returnA -< (ph `mappend` Suspend, End, construct stop)
+    returnA -< (ph `mappend` Suspend, End, stopped)
 
 
 repeatedly :: Monad m => Plan i o m a -> ProcessA (Kleisli m) (Event i) (Event o)

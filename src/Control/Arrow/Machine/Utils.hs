@@ -52,10 +52,15 @@ delay = join >>> fit unKleisli delayImpl >>> split
         Pl.yield x
 
 hold :: ArrowApply a => b -> ProcessA a (Event b) b
+{-
 hold old = ProcessA $ proc (ph, evx) ->
   do
     let new = fromEvent old evx
     returnA -< (ph `mappend` Suspend, new, hold new)
+-}
+hold old = proc evx -> 
+  do
+    rSwitch (arr $ const old) -< ((), arr . const <$> evx)
 
 var :: (ArrowApply a, ArrowLoop a) => b -> ProcessA a (Event (b -> b)) b
 var i = proc f -> 
@@ -76,6 +81,29 @@ edge = ProcessA $ impl Nothing
           else
             (ph `mappend` Suspend, NoEvent, ProcessA $ impl mvx)
     
+switch :: ArrowApply a => 
+          ProcessA a b (c, Event t) -> 
+          (t -> ProcessA a b c) ->
+          ProcessA a b c
+switch (ProcessA init) cont = ProcessA $ init >>> 
+    proc (ph', (y, evt), newProc) -> 
+        returnA -< (ph', y, next ph' evt newProc)
+  where
+    next Feed (Event t) _ = cont t
+    next _ _ newProc = switch newProc cont
+
+rSwitch :: ArrowApply a => ProcessA a b c -> 
+           ProcessA a (b, Event (ProcessA a b c)) c
+rSwitch (ProcessA cur) = ProcessA $ proc (ph, (x, eva)) -> 
+    judge ph eva -<< x
+  where
+    judge Feed (Event (ProcessA new)) = go Feed new
+    judge ph _ = go ph cur
+    go ph af = proc x -> 
+      do 
+        (ph', y, newProc) <- af -< (ph, x)
+        returnA -< (ph', y, rSwitch newProc)
+
 
 fork :: (ArrowApply a) =>
         ProcessA a (Event [b]) (Event b)
