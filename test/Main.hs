@@ -22,7 +22,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import RandomProc
-
+import Control.Arrow.Machine.Indexed
 
 myProc2 :: ProcessA (Kleisli (State [Int])) (Event Int) (Event Int)
 myProc2 = repeatedly core
@@ -132,31 +132,22 @@ rules =
   do
     describe "ProcessA as Category" $
       do        
-        prop "has asocciative composition" $ \f g h l ->
+        prop "has asocciative composition" $ \fx gx hx cond ->
           let
-              af = mkProc f
-              ag = mkProc g
-              ah = mkProc h
-              r1 = stateProc ((af >>> ag) >>> ah) l
-              r2 = stateProc (af >>> (ag >>> ah)) l
+              f = mkProc fx
+              g = mkProc gx
+              h = mkProc hx
+              equiv = mkEquivTest cond
             in
-              r1 == r2
-{-
-1) ProcessA as Category has asocciative composition
-Falsifiable (after 28 tests and 7 shrinks): 
-PgDouble (PgDouble (PgPush (PgDouble (PgPop (PgNop,PgPop (PgStop,PgIncl (PgIncl PgNop)) (PjFst PgStop)) (PjFst (PgOdd (PgDouble PgNop)))))))
-PgPop (PgPop (PgDouble (PgPush (PgDouble PgStop)),PgIncl PgNop) (PjSnd PgNop),PgNop) (PjFst (PgPop (PgNop,PgNop) (PjSnd PgNop)))
-PgPop (PgNop,PgNop) (PjFst PgNop)
-[0]
--}
-        prop "has identity" $ \f g l ->
+              ((f >>> g) >>> h) `equiv` (f >>> (g >>> h))
+
+        prop "has identity" $ \fx gx cond ->
           let
-              af = mkProc f
-              ag = mkProc g
-              r1 = stateProc (af >>> ag) l
-              r2 = stateProc (af >>> Cat.id >>> ag) l
+              f = mkProc fx
+              g = mkProc gx
+              equiv = mkEquivTest cond
             in
-              r1 == r2
+              (f >>> g) `equiv` (f >>> Cat.id >>> g)
 
     describe "ProcessA as Arrow" $
       do        
@@ -165,14 +156,13 @@ PgPop (PgNop,PgNop) (PjFst PgNop)
             (runProcessA . arr . fmap $ (+ 2)) [1, 2, 3]
               `shouldBe` [3, 4, 5]
 
-        prop "arr id is identity" $ \f g l ->
+        prop "arr id is identity" $ \fx gx cond ->
           let
-              af = mkProc f
-              ag = mkProc g
-              r1 = stateProc (af >>> ag) l
-              r2 = stateProc (af >>> arr id >>> ag) l
+              f = mkProc fx
+              g = mkProc gx
+              equiv = mkEquivTest cond
             in
-              r1 == r2
+              (f >>> g) `equiv` (f >>> arr id >>> g)
 
         it "can be parallelized" $
           let
@@ -187,55 +177,41 @@ PgPop (PgNop,PgNop) (PjFst PgNop)
                 `shouldBe` [1,2,3]
             state `shouldBe` [1,2,3]
 
-        prop "first and composition." $ \(fx, gx, l) ->
+        prop "first and composition." $ \fx gx cond ->
           let
               f = mkProc fx
               g = mkProc gx
-              x1 = stateProc (arr de >>> first (f >>> g) >>> arr en) (l::[(Int, Int)])
-              x2 = stateProc (arr de >>> first f >>> first g >>> arr en) (l::[(Int, Int)])
+              equiv = mkEquivTest2 cond
             in
-              x1 == x2
+              (first (f >>> g)) `equiv` (first f >>> first g)
 
-        prop "first-second commutes" $  \(fx, l) ->
+        prop "first-second commutes" $  \fx cond ->
           let
-              a1 = first $ mkProc fx
-              a2 = second (arr $ fmap (+2))
-
-              x1 = stateProc (arr de >>> a1 >>> a2 >>> arr en)
-                   (l::[(Int, Int)])
-              x2 = stateProc (arr de >>> a2 >>> a1 >>> arr en)
-                   (l::[(Int, Int)])
+              f = first $ mkProc fx
+              g = second (arr $ fmap (+2))
+              
+              equiv = mkEquivTest2 cond
             in
-              x1 == x2
+              (f >>> g) `equiv` (g >>> f)
 
-        prop "first-fst commutes" $  \(fx, l) ->
-          let
-              a = mkProc fx
-
-              x1 = stateProc (arr de >>> first a >>> arr fst)
-                   (l::[(Int, Int)])
-              x2 = stateProc (arr de >>> arr fst >>> a)
-                   (l::[(Int, Int)])
-            in
-              x1 == x2
-
-        prop "assoc relation" $ \(fx, l) ->
+        prop "first-fst commutes" $  \fx cond ->
           let
               f = mkProc fx
+              equiv = mkEquivTest cond
+                    ::(MyTestT (Event Int, Event Int) (Event Int))
+            in
+              (first f >>> arr fst) `equiv` (arr fst >>> f)
 
-              en (ex, (ey, ez)) = Event (toN ex, (toN ey, toN ez))
-              toN (Event x) = Just x
-              toN NoEvent = Nothing
-              toN End = Nothing
-              de (Event ((x, y),z))= ((Event x, Event y), Event z)
-              de _ = ((NoEvent, NoEvent), NoEvent)
-              
+        prop "assoc relation" $ \fx cond ->
+          let
+              f = mkProc fx
               assoc ((a,b),c) = (a,(b,c))
 
-              x1 = stateProc (arr de >>> first (first f) >>> arr assoc >>> arr en) (l::[((Int, Int), Int)])
-              x2 = stateProc (arr de >>> arr assoc >>> first f >>> arr en) (l::[((Int, Int), Int)])
+              equiv = mkEquivTest cond
+                    ::(MyTestT ((Event Int, Event Int), Event Int)
+                               (Event Int, (Event Int, Event Int)))
             in
-              x1 == x2
+              (first (first f) >>> arr assoc) `equiv` (arr assoc >>> first f)
 
 loops =
   do
@@ -285,32 +261,21 @@ loops =
             pure (evx, f) = (f <$> evx, fixcore f)
             apure = arr pure
 
-        prop "left tightening" $ \(l, fx, fy, fz) ->
+        prop "left tightening" $ \fx cond ->
           let
-              a1 = mkProc fx
-              a2 = mkProc fy
-              a3 = mkProc fz
+              f = mkProc fx
 
-              x1 = stateProc (a1 >>> loop (first a2 >>> apure) >>> a3)
-                   (l::[Int])
-              x2 = stateProc (a1 >>> a2 >>> loop apure >>> a3)
-                   (l::[Int])
+              equiv = mkEquivTest cond
             in
-              x1 == x2
+              (loop (first f >>> apure)) `equiv` (f >>> loop apure)
 
-        prop "right tightening" $ \(l, fx, fy, fz) ->
+        prop "right tightening" $ \fx cond ->
           let
-              a1 = mkProc fx
-              a2 = mkProc fy
-              a3 = mkProc fz
+              f = mkProc fx
 
-
-              x1 = stateProc (a1 >>> loop (apure >>> first a2) >>> a3)
-                   (l::[Int])
-              x2 = stateProc (a1 >>> loop apure >>> a2 >>> a3)
-                   (l::[Int])
+              equiv = mkEquivTest cond
             in
-              x1 == x2
+              (loop (apure >>> first f)) `equiv` (loop apure >>> f)
 
 choice =
   do
@@ -330,22 +295,16 @@ choice =
               in
                 r1 `shouldBe` ([1],[])
 
-        prop "left (f >>> g) = left f >>> left g" $ \e f g h j1 l ->
+        prop "left (f >>> g) = left f >>> left g" $ \fx gx cond ->
             let
-                ae = mkProc e
-                af = mkProc f
-                ag = mkProc g
-                ah = mkProc h
-                aj1 = arr $ if j1 then Left else Right
-                aj2 = arr $ either id id
-                r1 = stateProc 
-                       (ae >>> aj1 >>> left (af >>> ag) >>> aj2 >>> ah) 
-                       l
-                r2 = stateProc 
-                       (ae >>> aj1 >>> left af >>> left ag >>> aj2 >>> ah) 
-                       l
+                f = mkProc fx
+                g = mkProc gx
+                
+                equiv = mkEquivTest cond
+                    ::(MyTestT (Either (Event Int) (Event Int))
+                               (Either (Event Int) (Event Int)))
               in
-                r1 == r2
+                (left (f >>> g)) `equiv` (left f >>> left g)
 
 
 plans = describe "Plan" $
