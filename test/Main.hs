@@ -22,7 +22,6 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import RandomProc
-import Control.Arrow.Machine.Indexed
 
 myProc2 :: ProcessA (Kleisli (State [Int])) (Event Int) (Event Int)
 myProc2 = repeatedly core
