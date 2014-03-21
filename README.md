@@ -16,9 +16,6 @@ Experimental.
 This version has performance issue.
 And APIs not fixed.
 
-Running
+Usage
 ---------------
-    cd test
-    make
-
 See example of test/Main.hs
