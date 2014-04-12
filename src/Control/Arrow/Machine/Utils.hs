@@ -10,6 +10,7 @@ module
         -- * AFRP-like utilities
         delay,
         hold,
+        accum,
         edge,
         passRecent,
         withRecent,
@@ -87,8 +88,13 @@ hold old = ProcessA $ proc (ph, evx) ->
 -}
 hold old = proc evx -> 
   do
-    rSwitch (arr $ const old) -< ((), arr . const <$> evx)
+    rSwitch (arr $ const old) -< (old, arr . const <$> evx)
 
+accum ::
+    ArrowApply a => b -> ProcessA a (Event (b->b)) b
+accum old = proc evf ->
+  do
+    rSwitch (arr $ const old) -< (old, arr <$> evf)
 
 edge :: 
     (ArrowApply a, Eq b) =>
