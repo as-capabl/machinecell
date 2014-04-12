@@ -2,15 +2,13 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE NoMonomorphismRestriction #-}
+
 module
     WxHandler
 where
 
 import qualified Control.Arrow.Machine as P
-import Control.Applicative ((<$>), (<*>))
+import Control.Applicative ((<$>), (<*>), (<$))
 import qualified Control.Category as Cat
 import Control.Arrow
 import Control.Arrow.ArrowIO
@@ -59,23 +57,19 @@ listenID :: ArrowApply a =>
                  (P.Event EventArg)
 listenID = proc (World _ etp, myID) ->
   do
-     P.pass -< go myID etp
+     ret <- P.filter (arr fst) -< go myID <$> etp
+     returnA -< snd <$> ret
 
   where
-    go myID (P.Event (curID, ea)) = 
-        if curID == myID 
-          then P.Event ea 
-          else P.NoEvent
-    go _ P.NoEvent = P.NoEvent
-    go _ P.End = P.End
+    go myID (curID, ea) = (curID == myID, ea)
 
 
 onInit :: (ArrowApply a) => 
          P.ProcessA a (World a) (P.Event ())
 onInit = proc world -> 
   do
-    ea <- listenID -< (world,initialID)
-    P.pass -< const () `fmap` ea
+    ea <- listenID -< (world, initialID)
+    P.echo -< () <$ ea
 
 
 
@@ -88,14 +82,14 @@ listen :: (ArrowIO a, ArrowApply a, Eq initArg) =>
 listen reg getter = proc (world@(World env etp), ia) ->
   do
     initMsg <- P.edge -< ia
-    evId <- P.anyTime (arrIO newID) -< fmap (const env) initMsg
+    evId <- P.anytime (arrIO newID) -< env <$ initMsg
 
     (returnA -< evId) `P.passRecent` \myID ->
       do
-        P.anyTime reg -< fmap (const (handleProc env myID, ia)) initMsg
+        P.anytime reg -< (handleProc env myID, ia) <$ initMsg
      
         ea <- listenID -< (world, myID)
-        P.anyTime getter -< ea
+        P.anytime getter -< ea
 
 
 

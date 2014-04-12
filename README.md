@@ -6,7 +6,7 @@ Arrow based Stream transducer.
 Features
 ---------------
 * Monadic (ArrowApply) side effect
-* N-ary output
+* 1-to-N output
 * Coroutine (Plan monad)
 * AFRP-like utilities (hold, edge, switch...)
 

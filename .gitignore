@@ -6,5 +6,5 @@ cabal-dev
 *.chs.h
 .virthualenv
 
-test/spec
+
 

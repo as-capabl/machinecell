@@ -9,7 +9,7 @@ module
 where
 
 import Data.Maybe (fromMaybe)
-import Control.Arrow.Machine
+import Control.Arrow.Machine as P
 import Control.Applicative ((<$>), (<*>), (<$))
 import qualified Control.Category as Cat
 import Control.Arrow
@@ -23,31 +23,13 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import RandomProc
 
-myProc2 :: ProcessA (Kleisli (State [Int])) (Event Int) (Event Int)
-myProc2 = repeatedly core
-  where
-    action x = 
-      do 
-        modify (++ [x])
-        return x
-    core = 
-      do
-        x <- await
-        z <- lift $ action x
-        yield `mapM` (take z $ repeat z)
-
-
--- helper
-toN (Event x) = Just x
-toN NoEvent = Nothing
-toN End = Nothing
-en (ex, ey) = Event (toN ex, toN ey)
-de evxy = (fst <$> evxy, snd <$> evxy)
-
 runKI a x = runIdentity (runKleisli a x)
 
 
-main = hspec $ do {basics; rules; loops; choice; plans; utility; execution}
+
+
+main = hspec $ do {basics; rules; loops; choice; plans; utility; switches; execution}
+
 
 basics =
   do
@@ -56,18 +38,15 @@ basics =
         it "is stream transducer." $
           do
             let
-              plan = 
+              process = repeatedly $
                 do
                   x <- await
                   yield x
                   yield (x + 1)
-              process = repeatedly plan
 
-            let
               l = [1,2,4]
 
-            let
-              resultA = runKI (runProcessA process) l
+              resultA = runProcessA process l
 
             resultA `shouldBe` [1, 2, 2, 3, 4, 5]
 
@@ -95,8 +74,14 @@ basics =
               l = [1000]
               doubler = mkProc $ PgDouble PgNop
               pusher = mkProc $ PgPush PgNop
-              a = pusher >>> doubler >>> (arr $ fmap (+1)) >>> 
-                  pusher >>> (arr $ fmap (+1)) >>> pusher
+              incl = mkProc $ PgIncl PgNop
+
+              -- doublerで信号が2つに分岐する。
+              -- このとき、副作用は1つ目の信号について末尾まで
+              -- -> 二つ目の信号について分岐点から末尾まで ...
+              -- の順で処理される。
+              a = pusher >>> doubler >>> incl >>> pusher >>> incl >>> pusher
+
               x = stateProc a l
             in
               x `shouldBe` ([1002, 1002], reverse [1000,1001,1002,1001,1002])
@@ -121,7 +106,7 @@ basics =
               split2' End = (End, End)
               gen = arr (fmap $ \x -> [x, x]) >>> fork >>> arr split2'
               r1 = runKI (runProcessA (gen >>> arr fst)) (l::[(Int, [Int])])
-              r2 = runKI (runProcessA (gen >>> second (fork >>> pass) >>> arr fst)) 
+              r2 = runKI (runProcessA (gen >>> second (fork >>> echo) >>> arr fst)) 
                    (l::[(Int, [Int])])
             in
               r1 == r2
@@ -167,9 +152,24 @@ rules =
           let
             in
           do
-            let (result, state) =
-                    stateProc (arr de >>> first myProc2 >>> arr en) $ 
-                                  map (\x->(x,x)) [1,2,3]
+            let 
+                myProc2 = repeatedlyT (Kleisli . const) $
+                  do
+                    x <- await
+                    lift $ modify (++ [x])
+                    yield `mapM` (take x $ repeat x)
+
+                toN (Event x) = Just x
+                toN NoEvent = Nothing
+                toN End = Nothing
+                en (ex, ey) = Event (toN ex, toN ey)
+                de evxy = (fst <$> evxy, snd <$> evxy)
+
+                l = map (\x->(x,x)) [1,2,3]
+
+                (result, state) =
+                    stateProc (arr de >>> first myProc2 >>> arr en) l
+                                  
             (result >>= maybe mzero return . fst) 
                 `shouldBe` [1,2,2,3,3,3]
             (result >>= maybe mzero return . snd) 
@@ -228,7 +228,7 @@ loops =
 
         it "can be used with rec statement(macninery)" $
           let
-              mc = anyTime Cat.id
+              mc = anytime Cat.id
               a = proc x ->
                 do
                   rec l <- mc -< (:l') <$> x
@@ -251,7 +251,7 @@ loops =
                     rec y <- mc -< (+z) <$> x
                         z <- hold 0 <<< delay -< y
                     returnA -< y
-            runKI (runProcessA pa) [1, 10] `shouldBe` [1, 2, 12, 24]
+            runProcessA pa [1, 10] `shouldBe` [1, 2, 12, 24]
 
     describe "Rules for ArrowLoop" $
       do
@@ -325,17 +325,13 @@ plans = describe "Plan" $
     it "can be constructed into ProcessA" $
       do
         let 
-            result = runKI
-                       (runProcessA (construct pl))
-                       l
+            result = runProcessA (construct pl) l
         result `shouldBe` [2, 3, 5, 6]
 
     it "can be repeatedly constructed into ProcessA" $
       do
         let
-            result = runKI
-                       (runProcessA (repeatedly pl))
-                       l
+            result = runProcessA (repeatedly pl) l
         result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
 
 
@@ -349,6 +345,50 @@ utility =
             runProcessA (arr (\x->(x,x)) >>> first delay >>> arr snd) [0, 1, 2] `shouldBe` [0, 1, 2]
 
 
+switches =
+  do
+    describe "switch" $
+      do
+        it "switches once" $
+          do
+            let 
+                before = proc evx -> 
+                  do
+                    ch <- P.filter (arr $ (\x -> x `mod` 2 == 0)) -< evx
+                    returnA -< (NoEvent, ch)
+
+                after t = proc evx -> returnA -< (t*) <$> evx
+
+                l = [1,3,4,1,3,2]
+
+                -- 最初に偶数が与えられるまでは、入力を無視(NoEvent)し、
+                -- それ以降は最初に与えられた偶数 * 入力値を返す
+                ret = runProcessA (switch before after) l
+
+                -- dが付くと次回からの切り替えとなる
+                retD = runProcessA (dSwitch before after) l
+
+            ret `shouldBe` [16, 4, 12, 8]
+            retD `shouldBe` [4, 12, 8]
+
+    describe "rSwitch" $
+      do
+        it "switches any times" $
+          do
+            let
+               theArrow sw = proc evtp ->
+                 do
+                   (evx, evarr) <- P.split -< evtp
+                   sw (arr $ fmap (+2)) -< (evx, evarr)
+
+               l = [(Event 5, NoEvent),
+                    (Event 1, Event (arr $ fmap (*2))),
+                    (Event 2, NoEvent)]
+               ret = runProcessA (theArrow rSwitch) l
+               retD = runProcessA (theArrow drSwitch) l
+
+            ret `shouldBe` [7, 2, 4]
+            retD `shouldBe` [7, 3, 4]
 
 execution = describe "Execution of ProcessA" $
     do
@@ -367,15 +407,15 @@ execution = describe "Execution of ProcessA" $
       it "supports step execution" $
         do
           let
-              (x, now) = runKI (stepRun init) 1
+              (x, now) = stepRun init 1
           x `shouldBe` [1, 2]
 
           let
-              (x, now2) = runKI (stepRun now) 1
+              (x, now2) = stepRun now 1
           x `shouldBe` [1, 2, 6]
 
           let
-              (x, _) = runKI (stepRun now2) 1
+              (x, _) = stepRun now2 1
           x `shouldBe` ([]::[Int])
 
 

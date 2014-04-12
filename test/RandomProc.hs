@@ -68,7 +68,7 @@ mkProc PgNop = Cat.id
 
 mkProc (PgPush next) = mc >>> mkProc next
   where
-    mc = repeatedly $
+    mc = repeatedlyT (Kleisli . const) $
        do
          x <- await
          lift $ modify (\xs -> x:xs)
@@ -77,7 +77,7 @@ mkProc (PgPush next) = mc >>> mkProc next
 mkProc (PgPop (fx, fy) fz) =
     mc >>> P.split >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
   where
-    mc = repeatedly $
+    mc = repeatedlyT (Kleisli . const) $
        do
          x <- await
          ys <- lift $ get

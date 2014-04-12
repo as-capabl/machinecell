@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 module
     Control.Arrow.Machine.Types
+    -- This file ncludes internals. Export definitions is at ../Machine.hs
 where
 
 import qualified Control.Category as Cat
@@ -35,7 +36,7 @@ instance
 type StepType a b c = a (Phase, b) (Phase, c, ProcessA a b c) 
 
 data ProcessA a b c = ProcessA { 
-      step :: a (Phase, b) (Phase, c, ProcessA a b c) 
+      step :: StepType a b c
     }
 
 fit :: (Arrow a, Arrow a') => 
@@ -67,7 +68,7 @@ instance
   where
     id = ProcessA (arrStep id)
     {-# INLINE id #-}
-    g . f = ProcessA $ concatStep (step f) (step g)
+    g . f = ProcessA $ compositeStep (step f) (step g)
     {-# INLINE (.) #-}
 
 
@@ -94,23 +95,21 @@ parStep f g = proc (ph, (x1, x2)) ->
     returnA -< (ph1 `mappend` ph2, (y1, y2), pa' *** pb')
 {-# INLINE [1] parStep #-}
 
-arrStep :: ArrowApply a => (b->c) -> a (Phase, b) (Phase, c, ProcessA a b c)
+arrStep :: ArrowApply a => (b->c) -> StepType a b c
 arrStep f = proc (ph, x) ->
     returnA -< (ph `mappend` Suspend, f x, ProcessA $ arrStep f)
 {-# INLINE [1] arrStep #-}
 
-concatStep :: ArrowApply a => 
-              StepType a b d ->
-              StepType a d c ->
-              StepType a b c
-concatStep f g = proc (ph, x) -> concatStep' ph f g -<< (ph, x)
-{-# INLINE [1] concatStep #-}
+compositeStep :: ArrowApply a => 
+              StepType a b d -> StepType a d c -> StepType a b c
+compositeStep f g = proc (ph, x) -> compositeStep' ph f g -<< (ph, x)
+{-# INLINE [1] compositeStep #-}
 
-concatStep' :: ArrowApply a => 
+compositeStep' :: ArrowApply a => 
               Phase -> 
               StepType a b d -> StepType a d c -> StepType a b c
              
-concatStep' Sweep f g = proc (_, x) ->
+compositeStep' Sweep f g = proc (_, x) ->
   do
     (ph1, r1, _) <- f -< (Suspend, x)
     (ph2, r2, pb') <- g -<< (Sweep, r1)
@@ -124,7 +123,7 @@ concatStep' Sweep f g = proc (_, x) ->
         (ph2, r2, pb') <- g -< (ph1, r1)
         returnA -< (ph2, r2, pa' >>> pb')
 
-concatStep' ph f g = proc (_, x) ->
+compositeStep' ph f g = proc (_, x) ->
   do
     (ph1, r1, pa') <- f -< (ph, x)
     (ph2, r2, pb') <- g -<< (ph1, r1)
@@ -133,23 +132,23 @@ concatStep' ph f g = proc (_, x) ->
 -- rules
 {-# RULES
 "ProcessA: concat/concat" 
-    forall f g h. concatStep (concatStep f g) h = concatStep f (concatStep g h)
+    forall f g h. compositeStep (compositeStep f g) h = compositeStep f (compositeStep g h)
 "ProcessA: arr/arr"
-    forall f g. concatStep (arrStep f) (arrStep g) = arrStep (g . f)
+    forall f g. compositeStep (arrStep f) (arrStep g) = arrStep (g . f)
 "ProcessA: arr/*"
-    forall f g. concatStep (arrStep f) g = dimapStep f id g
+    forall f g. compositeStep (arrStep f) g = dimapStep f id g
 "ProcessA: */arr"
-    forall f g. concatStep f (arrStep g) = dimapStep id g f
+    forall f g. compositeStep f (arrStep g) = dimapStep id g f
 "ProcessA: dimap/dimap"
     forall f g h i j. dimapStep f j (dimapStep g i h)  = dimapStep (g . f) (j . i) h
 "ProcessA: dimap/arr"
     forall f g h. dimapStep f h (arrStep g) = arrStep (h . g . f)
 "ProcessA: par/par"
-    forall f1 f2 g1 g2 h. concatStep (parStep f1 f2) (concatStep (parStep g1 g2) h) =
-        concatStep (parStep (concatStep f1 g1) (concatStep f2 g2)) h
+    forall f1 f2 g1 g2 h. compositeStep (parStep f1 f2) (compositeStep (parStep g1 g2) h) =
+        compositeStep (parStep (compositeStep f1 g1) (compositeStep f2 g2)) h
 "ProcessA: par/par-2"
-    forall f1 f2 g1 g2. concatStep (parStep f1 f2) (parStep g1 g2) =
-        parStep (concatStep f1 g1) (concatStep f2 g2)
+    forall f1 f2 g1 g2. compositeStep (parStep f1 f2) (parStep g1 g2) =
+        parStep (compositeStep f1 g1) (compositeStep f2 g2)
   #-}
 
 

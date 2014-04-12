@@ -7,12 +7,22 @@
 module
     Control.Arrow.Machine
       (
-        module Types, 
+        -- * Modules
         module Event, 
         module Utils,
-        module Plan)
+        module Plan,
+
+        -- * The transducer arrow
+        ProcessA(), 
+
+        fit, 
+        runProcessA, 
+        stopped
+       )
 where
-import Control.Arrow.Machine.Types as Types
+
 import Control.Arrow.Machine.Event as Event
 import Control.Arrow.Machine.Utils as Utils
 import Control.Arrow.Machine.Plan as Plan
+
+import Control.Arrow.Machine.Types

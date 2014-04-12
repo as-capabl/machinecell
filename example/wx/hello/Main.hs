@@ -38,16 +38,16 @@ data MyForm a b c = MyForm {
 machine = proc world ->
   do
     initMsg <- WxP.onInit -< world
-    form <- P.anyTime (arrIO0 setup) -< initMsg
+    form <- P.anytime (arrIO0 setup) -< initMsg
 
     (returnA -< form) `P.passRecent` \(MyForm f btnDlg btnQuit) ->
       do    
         dialogMsg <- WxP.onCommand -< (world, btnDlg)
-        P.anyTime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
+        P.anytime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
                 -< f <$ dialogMsg
 
         quitMsg <- WxP.onCommand -< (world, btnQuit)
-        P.anyTime (arrIO Wx.close) -< f <$ quitMsg
+        P.anytime (arrIO Wx.close) -< f <$ quitMsg
 
 
   where
