@@ -88,13 +88,13 @@ hold old = ProcessA $ proc (ph, evx) ->
 -}
 hold old = proc evx -> 
   do
-    rSwitch (arr $ const old) -< (old, arr . const <$> evx)
+    rSwitch (arr $ const old) -< ((), arr . const <$> evx)
 
 accum ::
     ArrowApply a => b -> ProcessA a (Event (b->b)) b
 accum old = proc evf ->
   do
-    rSwitch (arr $ const old) -< (old, arr <$> evf)
+    rSwitch (arr $ const old) -< ((), arr . const <$> (evf <*> pure old))
 
 edge :: 
     (ArrowApply a, Eq b) =>
@@ -378,12 +378,21 @@ tee = join >>> go
         evMaybe (return ()) (Pl.yield . Left) evx
         evMaybe (return ()) (Pl.yield . Right) evy
 
+
+gather ::
+    (ArrowApply a, Fd.Foldable f) =>
+    ProcessA a (f (Event b)) (Event b)
+gather = arr Event >>> 
+    Pl.repeatedly 
+        (Pl.await >>= Fd.mapM_ (evMaybe (return ()) Pl.yield))
+
+
 fork :: 
-    (ArrowApply a) =>
-    ProcessA a (Event [b]) (Event b)
+    (ArrowApply a, Fd.Foldable f) =>
+    ProcessA a (Event (f b)) (Event b)
 
 fork = Pl.repeatedly $ 
-    Pl.await >>= mapM Pl.yield
+    Pl.await >>= Fd.mapM_ Pl.yield
 
 
 anytime :: 
