@@ -1,7 +1,7 @@
 machinecell
 ===========
 
-Arrow based Stream transducer.
+Arrow based stream transducer.
 
 Features
 ---------------

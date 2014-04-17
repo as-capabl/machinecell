@@ -38,17 +38,12 @@ module
         anytime,
         par,
         parB,
-
-        -- * Step running
-        Running,
-        startRun,
-        stepRun
        )
 where
 
 import Prelude hiding (filter)
 
-import Data.Monoid (mappend)
+import Data.Monoid (mappend, mconcat)
 import qualified Data.Foldable as Fd
 import qualified Data.Traversable as Tv
 import qualified Control.Category as Cat
@@ -60,7 +55,6 @@ import Debug.Trace
 
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
-import Control.Arrow.Machine.Detail
 
 import qualified Control.Arrow.Machine.Plan as Pl
 
@@ -408,10 +402,16 @@ anytime action = Pl.repeatedlyT arrow $
   where
     arrow (ArrowMonad af) = af
 
-filter :: 
+{-
+asNeeded action = ProcessA $ snd action >>> arr post
+  where
+    post (ph, y) = (ph `mconcat` Suspend, y, asNeeded action)
+
+asNeeded :: 
     ArrowApply a =>
     a b Bool ->
     ProcessA a (Event b) (Event b)
+-}
 
 filter cond = Pl.repeatedlyT arrow $
   do
@@ -429,46 +429,3 @@ echo ::
 echo = filter (arr (const True))
 
 
----
---- ステップ実行
----
-type Running a b c = ProcessA a b c
-
-startRun :: 
-    Arrow a =>
-    ProcessA a (Event b) (Event c) ->
-    Running a (Event b) (Event c)
-
-startRun = id
-
-stepRun :: 
-    ArrowApply a =>
-    Running a (Event b) (Event c) ->
-    a b ([c], Running a (Event b) (Event c))
-
-stepRun pa = proc x ->
-  do
-    (ys, pa') <- go Feed pa (Event x) id -<< ()
-    returnA -< (ys [], pa')
-  where
-    go Suspend pa _ ys = proc _ ->
-        returnA -< (ys, pa)
-
-    go ph pa evx ys = proc _ ->
-      do
-        (ph', evy, pa') <- step pa -< (ph, evx)
-        (| hEvPh'
-            (\y -> go (adv ph') pa' NoEvent (\cont -> ys (y:cont)) -<< ())
-            (go (adv ph') pa' NoEvent ys -<< ())
-            (go (adv ph') pa' End ys -<< ())
-         |)
-            (ph', evy)
-
-    adv Feed = Sweep
-    adv Suspend = Suspend
-
-{-
-isStop :: ProcessA_ a b c -> Bool
-isStop (ProcessA_ pre post Mc.Stop) = True
-isStop _ = False
--}

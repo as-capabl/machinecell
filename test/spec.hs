@@ -402,20 +402,41 @@ execution = describe "Execution of ProcessA" $
               yield x
               yield (x+1)
               yield (x+5)
-          init = startRun $ construct pl
+          init = construct pl
 
       it "supports step execution" $
         do
           let
-              (x, now) = stepRun init 1
-          x `shouldBe` [1, 2]
+              (ret, now) = stepRun init 1
+          yields ret `shouldBe` [1, 2]
 
           let
-              (x, now2) = stepRun now 1
-          x `shouldBe` [1, 2, 6]
+              (ret, now2) = stepRun now 1
+          yields ret `shouldBe` [1, 2, 6]
 
           let
-              (x, _) = stepRun now2 1
-          x `shouldBe` ([]::[Int])
+              (ret, _) = stepRun now2 1
+          yields ret `shouldBe` ([]::[Int])
+      it "supports yield-driven step" $
+        do
+          let
+              init = construct $ 
+                do
+                  yield (-1)
+                  x <- await
+                  mapM yield (iterate (+1) x)
 
+              (ret, now) = stepYield init 5
+          yields ret `shouldBe` Just (-1)
+          hasConsumed ret `shouldBe` False
+
+          let
+              (ret, now2) = stepYield now 10
+          yields ret `shouldBe` Just 10
+          hasConsumed ret `shouldBe` True
+
+          let
+              (ret, now3) = stepYield now2 10
+          yields ret `shouldBe` Just 11
+          hasConsumed ret `shouldBe` False
 

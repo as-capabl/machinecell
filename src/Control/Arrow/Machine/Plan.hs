@@ -11,6 +11,8 @@ A coroutine monad, inspired by machines library.
 module
     Control.Arrow.Machine.Plan
       (
+        stopped,
+
         -- * Types and Primitives
         PlanT,
         Plan,
@@ -40,7 +42,12 @@ import Debug.Trace
 
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
-import Control.Arrow.Machine.Detail
+
+
+stopped :: 
+    (ArrowApply a, Occasional c) => ProcessA a b c
+stopped = arr (const end)
+
 
 
 data PlanF i o a where

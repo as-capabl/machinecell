@@ -16,7 +16,7 @@ extra-source-files:  README.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Control.Arrow.Machine, Control.Arrow.Machine.Event, Control.Arrow.Machine.Detail, Control.Arrow.Machine.Plan, Control.Arrow.Machine.Types, Control.Arrow.Machine.Utils
+  exposed-modules:     Control.Arrow.Machine, Control.Arrow.Machine.Event, Control.Arrow.Machine.Plan, Control.Arrow.Machine.Types, Control.Arrow.Machine.Utils, Control.Arrow.Machine.Running
 -- other-modules:       
   other-extensions:    FlexibleInstances, Arrows, RankNTypes, TypeSynonymInstances, MultiParamTypeClasses, GADTs, FlexibleContexts, NoMonomorphismRestriction, RecursiveDo
   build-depends:       base >=4.0, mtl >=2.0, haddock >= 0.6, free >=4.0 && <= 4.2, vector >=0.10, profunctors >=4.0

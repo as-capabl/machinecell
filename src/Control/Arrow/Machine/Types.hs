@@ -3,20 +3,13 @@
 {-# LANGUAGE GADTs #-}
 module
     Control.Arrow.Machine.Types
-    -- This file ncludes internals. Export definitions is at ../Machine.hs
+    -- This file includes internals. Export definitions is at ../Machine.hs
 where
 
 import qualified Control.Category as Cat
 import Data.Monoid (Monoid, mappend, mempty)
 import Data.Profunctor (Profunctor, dimap)
-import Control.Monad (liftM)
 import Control.Arrow
-import Control.Applicative
-import Debug.Trace
-import Data.Maybe
-
-import Control.Arrow.Machine.Event
-import Control.Arrow.Machine.Detail
 
 
 data Phase = Feed | Sweep | Suspend deriving (Eq, Show)
@@ -152,38 +145,6 @@ compositeStep' ph f g = proc (_, x) ->
   #-}
 
 
-runProcessA :: ArrowApply a => ProcessA a (Event b) (Event c) -> a [b] [c]
-runProcessA pa = proc xs -> 
-  do
-    ys <- go Sweep pa xs id -<< ()
-    returnA -< ys []
-  where
-    go Sweep pa [] ys = proc _ ->
-      do
-        (ph', y, pa') <- step pa -< (Sweep, End)
-        react y ph' pa' [] ys -<< ()
-
-    go Feed pa [] ys = arr $ const ys
-
-    go ph pa (x:xs) ys = proc _ ->
-      do
-        let (evx, xs') = if ph == Feed then (Event x, xs) else (NoEvent, x:xs)
-        (ph', y, pa') <- step pa -< (ph, evx)
-        react y ph' pa' xs' ys -<< ()
-    
-    react End ph pa xs ys =
-      do
-        go (adv ph) pa [] ys
-
-    react (Event y) ph pa xs ys =
-        go (adv ph) pa xs (\cont -> ys (y:cont))
-
-    react NoEvent ph pa xs ys =
-        go (adv ph) pa xs ys
-
-    adv Feed = Sweep
-    adv Suspend = Feed
-
 
 instance
     ArrowApply a => ArrowChoice (ProcessA a)
@@ -208,5 +169,3 @@ instance
             returnA -< ((ph', y, loop pa'), d')
 
 
-stopped :: (ArrowApply a, Occasional c) => ProcessA a b c
-stopped = arr (const end)

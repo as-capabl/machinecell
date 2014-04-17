@@ -30,7 +30,7 @@ newID env =  Wx.varUpdate (envGetIDPool env) inclID
 
 
 -- 実行環境
-type MainState a = P.Running a
+type MainState a = P.ProcessA a
                     (P.Event (EventID, EventArg)) (P.Event ())
 
 data EventEnv a = EventEnv {
@@ -120,7 +120,7 @@ wxReactimate run init = Wx.start go
 
             let init' = proc etp -> init -< World env etp
 
-            let st = P.startRun init'
+            let st = init'
 
 
         handleProc env initialID EventNoArg
