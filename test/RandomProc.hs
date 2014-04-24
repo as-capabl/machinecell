@@ -124,7 +124,7 @@ stateProc a i =
         return (fromJust x)
 -}
   where
-    mx = runKleisli (runProcessA a) i
+    mx = runKleisli (run a) i
 
 class 
     TestIn a

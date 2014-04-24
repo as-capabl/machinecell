@@ -46,7 +46,7 @@ basics =
 
               l = [1,2,4]
 
-              resultA = runProcessA process l
+              resultA = run process l
 
             resultA `shouldBe` [1, 2, 2, 3, 4, 5]
 
@@ -105,8 +105,8 @@ basics =
               split2' NoEvent = (NoEvent, NoEvent)
               split2' End = (End, End)
               gen = arr (fmap $ \x -> [x, x]) >>> fork >>> arr split2'
-              r1 = runKI (runProcessA (gen >>> arr fst)) (l::[(Int, [Int])])
-              r2 = runKI (runProcessA (gen >>> second (fork >>> echo) >>> arr fst)) 
+              r1 = runKI (run (gen >>> arr fst)) (l::[(Int, [Int])])
+              r2 = runKI (run (gen >>> second (fork >>> echo) >>> arr fst)) 
                    (l::[(Int, [Int])])
             in
               r1 == r2
@@ -137,7 +137,7 @@ rules =
       do        
         it "can be made from pure function(arr)" $
           do
-            (runProcessA . arr . fmap $ (+ 2)) [1, 2, 3]
+            (run . arr . fmap $ (+ 2)) [1, 2, 3]
               `shouldBe` [3, 4, 5]
 
         prop "arr id is identity" $ \fx gx cond ->
@@ -251,7 +251,7 @@ loops =
                     rec y <- mc -< (+z) <$> x
                         z <- hold 0 <<< delay -< y
                     returnA -< y
-            runProcessA pa [1, 10] `shouldBe` [1, 2, 12, 24]
+            run pa [1, 10] `shouldBe` [1, 2, 12, 24]
 
     describe "Rules for ArrowLoop" $
       do
@@ -325,13 +325,13 @@ plans = describe "Plan" $
     it "can be constructed into ProcessA" $
       do
         let 
-            result = runProcessA (construct pl) l
+            result = run (construct pl) l
         result `shouldBe` [2, 3, 5, 6]
 
     it "can be repeatedly constructed into ProcessA" $
       do
         let
-            result = runProcessA (repeatedly pl) l
+            result = run (repeatedly pl) l
         result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
 
 
@@ -341,8 +341,8 @@ utility =
       do
         it "delays input" $
           do
-            runProcessA (arr (\x->(x,x)) >>> first delay >>> arr fst) [0, 1, 2] `shouldBe` [0, 1, 2]
-            runProcessA (arr (\x->(x,x)) >>> first delay >>> arr snd) [0, 1, 2] `shouldBe` [0, 1, 2]
+            run (arr (\x->(x,x)) >>> first delay >>> arr fst) [0, 1, 2] `shouldBe` [0, 1, 2]
+            run (arr (\x->(x,x)) >>> first delay >>> arr snd) [0, 1, 2] `shouldBe` [0, 1, 2]
 
 
 switches =
@@ -363,10 +363,10 @@ switches =
 
                 -- 最初に偶数が与えられるまでは、入力を無視(NoEvent)し、
                 -- それ以降は最初に与えられた偶数 * 入力値を返す
-                ret = runProcessA (switch before after) l
+                ret = run (switch before after) l
 
                 -- dが付くと次回からの切り替えとなる
-                retD = runProcessA (dSwitch before after) l
+                retD = run (dSwitch before after) l
 
             ret `shouldBe` [16, 4, 12, 8]
             retD `shouldBe` [4, 12, 8]
@@ -384,8 +384,8 @@ switches =
                l = [(Event 5, NoEvent),
                     (Event 1, Event (arr $ fmap (*2))),
                     (Event 2, NoEvent)]
-               ret = runProcessA (theArrow rSwitch) l
-               retD = runProcessA (theArrow drSwitch) l
+               ret = run (theArrow rSwitch) l
+               retD = run (theArrow drSwitch) l
 
             ret `shouldBe` [7, 2, 4]
             retD `shouldBe` [7, 3, 4]

@@ -26,6 +26,6 @@ counter =
             next <- P.hold 0 <<< P.delay -< (+1) <$> output
         returnA -< output  
 
-main = print $ P.runProcessA counter (map b "ffffffffttfftt")
+main = print $ P.run counter (map b "ffffffffttfftt")
   where b 't' = True
         b 'f' = False

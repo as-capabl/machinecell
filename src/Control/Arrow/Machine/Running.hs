@@ -5,7 +5,7 @@
 module
     Control.Arrow.Machine.Running
       (
-        runProcessA,
+        run,
         ExecInfo,
         yields,
         hasConsumed,
@@ -34,8 +34,8 @@ handle f1 f2 f3 = proc (e, (ph, ev)) ->
     handleImpl _ _ = f2
 
 
-runProcessA :: ArrowApply a => ProcessA a (Event b) (Event c) -> a [b] [c]
-runProcessA pa = proc xs -> 
+run :: ArrowApply a => ProcessA a (Event b) (Event c) -> a [b] [c]
+run pa = proc xs -> 
   do
     ys <- go Sweep pa xs id -<< ()
     returnA -< ys []
