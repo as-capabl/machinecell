@@ -44,26 +44,24 @@ basics =
                   yield x
                   yield (x + 1)
 
-              l = [1,2,4]
-
-              resultA = run process l
+              resultA = run process [1,2,4]
 
             resultA `shouldBe` [1, 2, 2, 3, 4, 5]
 
+        let
+            -- 入力1度につき同じ値を2回出力する
+            doubler = repeatedly $ 
+                      do {x <- await; yield x; yield x}
+            -- 入力値をStateのリストの先頭にPushする副作用を行い、同じ値を出力する
+            pusher = repeatedlyT (Kleisli . const) $
+                     do {x <- await; lift $ modify (x:); yield x}
 
         it "has stop state" $
           let
-              -- 入力1度につき同じ値を2回出力する
-              a2 = mkProc $ PgDouble PgNop
-              -- 入力値をStateのリストの先頭にPushする副作用を行い、同じ値を出力する
-              a3 = mkProc $ PgPush PgNop
               -- 一度だけ入力をそのまま出力し、すぐに停止する
-              a4 = construct $ await >>= yield
+              onlyOnce = construct $ await >>= yield
 
-              l = [3, 3]
-
-              x = stateProc (a2 >>> a3 >>> a4)
-                   (l::[Int])
+              x = stateProc (doubler >>> pusher >>> onlyOnce) [3, 3]
             in
               -- 最後尾のMachineが停止した時点で処理を停止するが、
               -- 既にa2が出力した値の副作用は処理する
@@ -71,10 +69,7 @@ basics =
 
         it "has side-effect" $
           let
-              l = [1000]
-              doubler = mkProc $ PgDouble PgNop
-              pusher = mkProc $ PgPush PgNop
-              incl = mkProc $ PgIncl PgNop
+              incl = arr $ fmap (+1)
 
               -- doublerで信号が2つに分岐する。
               -- このとき、副作用は1つ目の信号について末尾まで
@@ -82,13 +77,12 @@ basics =
               -- の順で処理される。
               a = pusher >>> doubler >>> incl >>> pusher >>> incl >>> pusher
 
-              x = stateProc a l
+              x = stateProc a [1000]
             in
               x `shouldBe` ([1002, 1002], reverse [1000,1001,1002,1001,1002])
 
         it "never spoils any FEED" $
           let
-              doubler = mkProc $ PgDouble PgNop
               counter = construct $ counterDo 1
               counterDo n = 
                 do
@@ -409,14 +403,18 @@ execution = describe "Execution of ProcessA" $
           let
               (ret, now) = stepRun init 1
           yields ret `shouldBe` [1, 2]
+          hasStopped ret `shouldBe` False
 
           let
               (ret, now2) = stepRun now 1
           yields ret `shouldBe` [1, 2, 6]
+          hasStopped ret `shouldBe` True
 
           let
               (ret, _) = stepRun now2 1
           yields ret `shouldBe` ([]::[Int])
+          hasStopped ret `shouldBe` True
+
       it "supports yield-driven step" $
         do
           let
@@ -424,19 +422,22 @@ execution = describe "Execution of ProcessA" $
                 do
                   yield (-1)
                   x <- await
-                  mapM yield (iterate (+1) x)
+                  mapM yield (iterate (+1) x) -- infinite
 
               (ret, now) = stepYield init 5
           yields ret `shouldBe` Just (-1)
           hasConsumed ret `shouldBe` False
+          hasStopped ret `shouldBe` False
 
           let
               (ret, now2) = stepYield now 10
           yields ret `shouldBe` Just 10
           hasConsumed ret `shouldBe` True
+          hasStopped ret `shouldBe` False
 
           let
               (ret, now3) = stepYield now2 10
           yields ret `shouldBe` Just 11
           hasConsumed ret `shouldBe` False
+          hasStopped ret `shouldBe` False
 

@@ -47,7 +47,7 @@ import Data.Monoid (mappend, mconcat)
 import qualified Data.Foldable as Fd
 import qualified Data.Traversable as Tv
 import qualified Control.Category as Cat
-import Control.Monad (liftM, mzero, forever)
+import Control.Monad (liftM, forever)
 import Control.Monad.Trans
 import Control.Arrow
 import Control.Applicative
@@ -99,7 +99,8 @@ edge = ProcessA $ impl Nothing
     impl mvx = proc (ph, x) -> 
       do
         let equals = maybe False (==x) mvx
-        returnA -< if not equals 
+            isActive = not $ ph == Suspend
+        returnA -< if (not equals) && isActive
           then 
             (Feed, Event x, ProcessA $ impl (Just x))
           else

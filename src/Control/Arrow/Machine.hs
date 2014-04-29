@@ -8,10 +8,10 @@ module
     Control.Arrow.Machine
       (
         -- * Modules
-        module Event, 
-        module Utils,
-        module Plan,
-        module Running,
+        module Control.Arrow.Machine.Event, 
+        module Control.Arrow.Machine.Utils,
+        module Control.Arrow.Machine.Plan,
+        module Control.Arrow.Machine.Running,
 
         -- * The transducer arrow
         ProcessA(), 
@@ -19,9 +19,9 @@ module
        )
 where
 
-import Control.Arrow.Machine.Event as Event
-import Control.Arrow.Machine.Utils as Utils
-import Control.Arrow.Machine.Plan as Plan
-import Control.Arrow.Machine.Running as Running
+import Control.Arrow.Machine.Event
+import Control.Arrow.Machine.Utils
+import Control.Arrow.Machine.Plan
+import Control.Arrow.Machine.Running
 
 import Control.Arrow.Machine.Types

@@ -7,11 +7,13 @@ module
 where
 
 import qualified Control.Category as Cat
-import Data.Monoid (Monoid, mappend, mempty)
+import Data.Monoid (Monoid(..))
 import Data.Profunctor (Profunctor, dimap)
 import Control.Arrow
 
 
+-- | To get multiple outputs by one input, the `Phase` parameter is introduced.
+-- Once a value `Feed`ed, the machine is `Sweep`ed until it `Suspend`s.
 data Phase = Feed | Sweep | Suspend deriving (Eq, Show)
 
 instance 
@@ -28,6 +30,10 @@ instance
 
 type StepType a b c = a (Phase, b) (Phase, c, ProcessA a b c) 
 
+-- | The stream transducer arrow.
+-- To construct `ProcessA` instances, use `Control.Arrow.Machine.Plan.Plan`,
+-- `arr`, functions declared in `Control.Arrow.Machine.Utils`,
+-- or arrow combinations of them.
 data ProcessA a b c = ProcessA { 
       step :: StepType a b c
     }

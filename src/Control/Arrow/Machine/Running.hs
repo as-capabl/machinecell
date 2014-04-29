@@ -5,17 +5,18 @@
 module
     Control.Arrow.Machine.Running
       (
+        -- * Run at once.
         run,
-        ExecInfo,
-        yields,
-        hasConsumed,
-        hasStopped,
+        -- * Run step-by-step.
+        ExecInfo(..),
         stepRun,
         stepYield
       )
 where
 
 import Control.Arrow
+import Control.Applicative (Alternative (..))
+import Data.Monoid (Monoid (..))
 
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
@@ -64,6 +65,7 @@ run pa = proc xs ->
         go (adv ph) pa xs ys
 
 
+-- | Represents return values and informations of step executions.
 data ExecInfo fa =
     ExecInfo
       {
@@ -71,18 +73,27 @@ data ExecInfo fa =
         hasConsumed :: Bool,
         hasStopped :: Bool
       }
+    deriving (Eq, Show)
+
+instance
+    Alternative f => Monoid (ExecInfo (f a))
+  where
+    mempty = ExecInfo empty False False
+    ExecInfo y1 c1 s1 `mappend` ExecInfo y2 c2 s2 = 
+        ExecInfo (y1 <|> y2) (c1 || c2) (s1 || s2)
 
 stepRun :: 
     ArrowApply a =>
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo [c], ProcessA a (Event b) (Event c))
 
+
+
 stepRun pa = proc x ->
   do
-    (ys1, pa') <- go pa id -<< (Sweep, NoEvent)
-    (ys2, pa'') <- go pa' ys1 -<< (Feed, (Event x))
-    returnA -< (ExecInfo { yields = ys2 [], hasConsumed = True, hasStopped = False } , pa'')
-    -- TODO: stop handling
+    (ys1, pa', _) <- go pa id -<< (Sweep, NoEvent)
+    (ys2, pa'', hsS) <- go pa' ys1 -<< (Feed, (Event x))
+    returnA -< (ExecInfo { yields = ys2 [], hasConsumed = True, hasStopped = hsS } , pa'')
 
   where
     go pa ys = step pa >>> proc (ph', evy, pa') ->
@@ -90,7 +101,7 @@ stepRun pa = proc x ->
         (| handle
             (\y -> go pa' (\cont -> ys (y:cont)) -<< (adv ph', NoEvent))
             (go pa' ys -<< (adv ph', NoEvent))
-            (returnA -< (ys, pa'))
+            (returnA -< (ys, pa', case evy of {End->True; _->False}))
          |)
             (ph', evy)
 
@@ -102,23 +113,22 @@ stepYield ::
 
 stepYield pa = proc x ->
   do
-    (my, pa') <- go pa -<< (Sweep, NoEvent)
+    (my, pa', hsS) <- go pa -<< (Sweep, NoEvent)
     (| handle2 
-        (returnA -< (ExecInfo { yields = my, hasConsumed = False, hasStopped = False}, pa'))
+        (returnA -< (ExecInfo { yields = my, hasConsumed = False, hasStopped = hsS}, pa'))
         (do
-            (my2, pa'') <- go pa' -<< (Feed, (Event x))
-            returnA -< (ExecInfo { yields = my2, hasConsumed = True, hasStopped = False}, pa''))
+            (my2, pa'', hsS) <- go pa' -<< (Feed, (Event x))
+            returnA -< (ExecInfo { yields = my2, hasConsumed = True, hasStopped = hsS}, pa''))
      |)
         my
-    -- TODO: stop handling
 
   where
     go pa = step pa >>> proc (ph', evy, pa') ->
       do
         (| handle
-            (\y -> returnA -<< (Just y, pa'))
+            (\y -> returnA -<< (Just y, pa', False))
             (go pa' -<< (adv ph', NoEvent))
-            (returnA -< (Nothing, pa'))
+            (returnA -< (Nothing, pa', case evy of {End->True; _->False}))
          |)
             (ph', evy)
 

@@ -21,9 +21,12 @@ module
 where
 
 
-import Control.Monad (liftM)
+import Control.Monad (liftM, MonadPlus(..))
 import Control.Arrow
-import Control.Applicative (Applicative, pure, (<*>))
+import Control.Applicative (Applicative(..), Alternative(..), (<$>))
+import Data.Foldable (Foldable(..))
+import Data.Traversable (Traversable(..))
+import Data.Monoid (mempty)
 
 
 class 
@@ -76,6 +79,7 @@ hEv' f1 f2 f3 = proc (e, ev) ->
     helper NoEvent = f2
     helper End = f3
 
+
 instance 
     Functor Event 
   where
@@ -83,22 +87,80 @@ instance
     fmap f End = End
     fmap f (Event x) = Event (f x)
 
+
 instance 
     Applicative Event 
   where
     pure = Event
+
     (Event f) <*> (Event x) = Event $ f x
     End <*> _ = End
     _ <*> End = End
     _ <*> _ = NoEvent
+
+
+instance
+    Foldable Event
+  where
+    foldMap f (Event x) = f x
+    foldMap _ NoEvent = mempty
+    foldMap _ End = mempty
+
+
+instance
+    Traversable Event
+  where
+    traverse f (Event x) = Event <$> f x
+    traverse f NoEvent = pure NoEvent
+    traverse f End = pure End
+
+
+instance
+    Alternative Event
+  where
+    empty = NoEvent
+    End <|> _ = End
+    _ <|> End = End
+    Event x <|> _ = Event x
+    NoEvent <|> r = r
+
+
+instance
+    Monad Event
+  where
+    return = Event
+
+    Event x >>= f = f x
+    NoEvent >>= _ = NoEvent
+    End >>= _ = End
+
+    _ >> End = End
+    l >> r = l >>= const r
+    
+    fail _ = End
+
+
+instance
+    MonadPlus Event
+  where
+    mzero = End
+
+    Event x `mplus` _ = l
+    _ `mplus` Event x = Event x
+    End `mplus` r = r
+    l `mplus` End = l
+    _ `mplus` _ = NoEvent
+
 
 evMaybe :: b -> (a->b) -> Event a -> b
 evMaybe _ f (Event x) = f x
 evMaybe r _ NoEvent = r
 evMaybe r _ End = r
 
+
 fromEvent :: a -> Event a -> a
 fromEvent x = evMaybe x id
+
 
 -- TODO: テスト
 condEvent :: Bool -> Event a -> Event a
@@ -106,10 +168,12 @@ condEvent _ End = End
 condEvent True ev = ev
 condEvent False ev = NoEvent
 
+
 -- TODO: テスト
 filterEvent :: (a -> Bool) -> Event a -> Event a
 filterEvent cond ev@(Event x) = condEvent (cond x) ev
 filterEvent _ ev = ev
+
 
 -- TODO: テスト
 split :: (Arrow a, Occasional b) => a (Event b) b
@@ -118,6 +182,7 @@ split = arr go
     go (Event x) = x
     go NoEvent = noEvent
     go End = end
+
 
 join :: (Arrow a, Occasional b) => a b (Event b)
 join = arr go
@@ -128,9 +193,9 @@ join = arr go
        | otherwise = Event x
 
 
-
 split2 :: Event (Event a, Event b) -> (Event a, Event b)
 split2 = split
+
 
 join2 :: (Event a, Event b) -> Event (Event a, Event b)
 join2 = join

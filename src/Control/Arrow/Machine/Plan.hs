@@ -11,8 +11,6 @@ A coroutine monad, inspired by machines library.
 module
     Control.Arrow.Machine.Plan
       (
-        stopped,
-
         -- * Types and Primitives
         PlanT,
         Plan,
@@ -20,6 +18,8 @@ module
         await,
         yield,
         stop,
+
+        stopped,
 
         -- * Constructing machines
         constructT,
