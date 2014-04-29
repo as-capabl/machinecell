@@ -145,7 +145,7 @@ instance
   where
     mzero = End
 
-    Event x `mplus` _ = l
+    Event x `mplus` _ = Event x
     _ `mplus` Event x = Event x
     End `mplus` r = r
     l `mplus` End = l
