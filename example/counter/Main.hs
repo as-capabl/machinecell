@@ -1,11 +1,7 @@
 -- 参考：http://d.hatena.ne.jp/haxis_fx/20110726/1311657175
 
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE NoMonomorphismRestriction #-}
 module
     Main
 where

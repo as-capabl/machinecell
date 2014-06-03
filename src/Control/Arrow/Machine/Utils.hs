@@ -32,6 +32,10 @@ module
 
         -- * Other utility arrows
         tee,
+        gather,
+        -- sampleR,
+        -- sampleL,
+        source,
         fork,
         filter,
         echo,
@@ -44,6 +48,7 @@ where
 import Prelude hiding (filter)
 
 import Data.Monoid (mappend, mconcat)
+import Data.Tuple (swap)
 import qualified Data.Foldable as Fd
 import qualified Data.Traversable as Tv
 import qualified Control.Category as Cat
@@ -373,6 +378,24 @@ tee = join >>> go
         evMaybe (return ()) (Pl.yield . Left) evx
         evMaybe (return ()) (Pl.yield . Right) evy
 
+{-
+-- Problem with the last output.
+sampleR ::
+    ArrowApply a =>
+    ProcessA a (Event b1, Event b2) (Event (b1, [b2]))
+sampleR = join >>> Pl.construct (go id)
+  where
+    go l = 
+      do
+        (evx, evy) <- Pl.await
+        let l2 = evMaybe l (\y -> l . (y:)) evy
+        evMaybe (go l2) (\x -> Pl.yield (x, l2 []) >> go id) evx
+
+sampleL ::
+    ArrowApply a =>
+    ProcessA a (Event b1, Event b2) (Event ([b1], b2))
+sampleL = arr swap >>> sampleR >>> evMap swap
+-}
 
 gather ::
     (ArrowApply a, Fd.Foldable f) =>
@@ -381,6 +404,15 @@ gather = arr Event >>>
     Pl.repeatedly 
         (Pl.await >>= Fd.mapM_ (evMaybe (return ()) Pl.yield))
 
+-- |It's also possible that source is defined without any await.
+-- 
+-- But awaits are useful to synchronize other inputs.
+source ::
+    ArrowApply a =>
+    [c] -> ProcessA a (Event b) (Event c)
+source l = Pl.construct $ mapM_ yd l
+  where
+    yd x = Pl.await >> Pl.yield x
 
 fork :: 
     (ArrowApply a, Fd.Foldable f) =>

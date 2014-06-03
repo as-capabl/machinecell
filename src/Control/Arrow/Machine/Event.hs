@@ -13,6 +13,7 @@ module
         hEv', 
         evMaybe,
         fromEvent,
+        evMap,
         split,
         join,
         split2,
@@ -152,13 +153,15 @@ instance
     _ `mplus` _ = NoEvent
 
 
-evMaybe :: b -> (a->b) -> Event a -> b
-evMaybe _ f (Event x) = f x
-evMaybe r _ NoEvent = r
-evMaybe r _ End = r
+evMaybe :: Arrow a => c -> (b->c) -> a (Event b) c
+evMaybe r f = arr (go r f)
+  where
+    go _ f (Event x) = f x
+    go r _ NoEvent = r
+    go r _ End = r
 
 
-fromEvent :: a -> Event a -> a
+fromEvent :: Arrow a => b -> a (Event b) b
 fromEvent x = evMaybe x id
 
 
@@ -173,6 +176,10 @@ condEvent False ev = NoEvent
 filterEvent :: (a -> Bool) -> Event a -> Event a
 filterEvent cond ev@(Event x) = condEvent (cond x) ev
 filterEvent _ ev = ev
+
+
+evMap ::  Arrow a => (b->c) -> a (Event b) (Event c)
+evMap = arr . fmap
 
 
 -- TODO: テスト

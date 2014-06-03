@@ -3,18 +3,10 @@ machinecell
 
 Arrow based stream transducer.
 
-Features
+Description
 ---------------
-* Monadic (ArrowApply) side effect
-* 1-to-N output
-* Coroutine (Plan monad)
-* AFRP-like utilities (hold, edge, switch...)
-
-Status
----------------
-Experimental.
-This version has performance issue.
-And APIs not fixed.
+Coroutine-style stream processing library with support of arrow combinatins.
+AFRP-like utilities are also available.
 
 Usage
 ---------------

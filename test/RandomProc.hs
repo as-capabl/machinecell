@@ -16,9 +16,6 @@ import Control.Monad.Trans
 import Control.Monad.State
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import Data.Maybe (fromJust)
-import System.Timeout (timeout)
-import Control.DeepSeq (deepseq)
-import System.IO.Unsafe (unsafePerformIO)
 
 
 data ProcJoin = PjFst ProcGen | PjSnd ProcGen | PjSum ProcGen
@@ -68,7 +65,7 @@ mkProc PgNop = Cat.id
 
 mkProc (PgPush next) = mc >>> mkProc next
   where
-    mc = repeatedlyT (Kleisli . const) $
+    mc = repeatedlyT kleisli0 $
        do
          x <- await
          lift $ modify (\xs -> x:xs)
@@ -77,7 +74,7 @@ mkProc (PgPush next) = mc >>> mkProc next
 mkProc (PgPop (fx, fy) fz) =
     mc >>> P.split >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
   where
-    mc = repeatedlyT (Kleisli . const) $
+    mc = repeatedlyT kleisli0 $
        do
          x <- await
          ys <- lift $ get
