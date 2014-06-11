@@ -88,10 +88,19 @@ constructT :: (Monad m, ArrowApply a) =>
 
 constructT fit pl = ProcessA $ proc (ph, evx) ->
   do
-    ff <- fit (F.runFreeT pl) -< ()
-    go ph ff -<< evx
+    probe ph pl -<< evx
+    
 
   where
+    probe Suspend pl = proc _ ->
+        returnA -< (Suspend, NoEvent, constructT fit pl)
+        
+    probe ph pl = proc evx ->
+      do
+        ff <- fit (F.runFreeT pl) -< ()
+        go ph ff -<< evx
+
+
     go Feed (F.Free (AwaitPF f)) = proc evx ->
       do
         (| hEv'
