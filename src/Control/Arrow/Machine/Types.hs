@@ -112,16 +112,16 @@ compositeStep' :: ArrowApply a =>
              
 compositeStep' Sweep f g = proc (_, x) ->
   do
-    (ph1, r1, _) <- f -< (Suspend, x)
+    (ph1, r1, pa') <- f -< (Suspend, x)
     (ph2, r2, pb') <- g -<< (Sweep, r1)
-    cont ph2 x -<< (ph2, r2, ProcessA f >>> pb')
+    cont ph2 x -<< (r2, pa', pb')
   where
-    cont Feed x = returnA
-    cont Sweep x = returnA
-    cont Suspend x = proc _ ->
+    cont Feed x = arr $ \(r, pa, pb) -> (Feed, r, pa >>> pb)
+    cont Sweep x = arr $ \(r, pa, pb) -> (Sweep, r, pa >>> pb)
+    cont Suspend x = proc (_, pa, pb) ->
       do
-        (ph1, r1, pa') <- f -< (Sweep, x)
-        (ph2, r2, pb') <- g -< (ph1, r1)
+        (ph1, r1, pa') <- step pa -<< (Sweep, x)
+        (ph2, r2, pb') <- step pb -<< (ph1, r1)
         returnA -< (ph2, r2, pa' >>> pb')
 
 compositeStep' ph f g = proc (_, x) ->

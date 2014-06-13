@@ -33,8 +33,7 @@ module
         -- * Other utility arrows
         tee,
         gather,
-        -- sampleR,
-        -- sampleL,
+        sample,
         source,
         fork,
         filter,
@@ -42,6 +41,7 @@ module
         anytime,
         par,
         parB,
+        onEnd
        )
 where
 
@@ -378,24 +378,17 @@ tee = join >>> go
         evMaybe (return ()) (Pl.yield . Left) evx
         evMaybe (return ()) (Pl.yield . Right) evy
 
-{-
--- Problem with the last output.
-sampleR ::
+
+sample ::
     ArrowApply a =>
-    ProcessA a (Event b1, Event b2) (Event (b1, [b2]))
-sampleR = join >>> Pl.construct (go id)
+    ProcessA a (Event b1, Event b2) [b1]
+sample = join >>> Pl.construct (go id) >>> hold []
   where
     go l = 
       do
         (evx, evy) <- Pl.await
-        let l2 = evMaybe l (\y -> l . (y:)) evy
-        evMaybe (go l2) (\x -> Pl.yield (x, l2 []) >> go id) evx
-
-sampleL ::
-    ArrowApply a =>
-    ProcessA a (Event b1, Event b2) (Event ([b1], b2))
-sampleL = arr swap >>> sampleR >>> evMap swap
--}
+        let l2 = evMaybe l (\x -> l . (x:)) evx
+        evMaybe (go l2) (\_ -> Pl.yield (l2 []) >> go id) evy
 
 gather ::
     (ArrowApply a, Fd.Foldable f) =>
@@ -462,3 +455,20 @@ echo ::
 echo = filter (arr (const True))
 
 
+onEnd ::
+    (ArrowApply a, Occasional b) =>
+    ProcessA a b (Event ())
+{-
+onEnd = dSwitch (arr go) id
+  where
+    go ev
+        | isEnd ev = (undefined, Event Pl.stopped)
+        | otherwise = noEvent
+-}
+onEnd = ProcessA $ proc (ph, ev) ->
+  do
+    returnA -< go ph ev
+  where
+    go ph ev 
+        | isEnd ev = (Feed, Event (), Pl.stopped)
+        | otherwise = (ph `mappend` Suspend, noEvent, onEnd)

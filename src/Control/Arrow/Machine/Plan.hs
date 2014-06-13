@@ -97,8 +97,8 @@ constructT fit pl = ProcessA $ proc (ph, evx) ->
         
     probe ph pl = proc evx ->
       do
-        ff <- fit (F.runFreeT pl) -< ()
-        go ph ff -<< evx
+        pfr <- fit (F.runFreeT pl) -< ()
+        go ph pfr -<< evx
 
 
     go Feed (F.Free (AwaitPF f)) = proc evx ->
@@ -112,8 +112,9 @@ constructT fit pl = ProcessA $ proc (ph, evx) ->
             (returnA -< (Feed, End, stopped))
            |) evx
 
-    go ph pfr = proc evx ->        
-        oneYieldPF fit ph pfr -<< ()
+    go ph pfr = proc evx ->
+        oneYieldPF fit ph pfr -< ()
+
 
 oneYieldPF :: (Monad m, ArrowApply a) => 
               (forall b. m b -> a () b) ->

@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                machinecell
-version:             1.0.0
+version:             1.0.1
 synopsis:            Arrow based stream transducers
 description:         Stream processing library similar to pipe, couduit, machines. With support of arrow combinatins, or the arrow notation. AFRP-like utilities are also available.
 license:             BSD3
@@ -39,4 +39,4 @@ source-repository head
 source-repository this
   type:		git
   location:	https://github.com/as-capabl/machinecell.git
-  tag:		release-1.0.0-1
+  tag:		release-1.0.1

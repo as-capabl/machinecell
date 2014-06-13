@@ -338,6 +338,42 @@ utility =
             run (arr (\x->(x,x)) >>> first delay >>> arr fst) [0, 1, 2] `shouldBe` [0, 1, 2]
             run (arr (\x->(x,x)) >>> first delay >>> arr snd) [0, 1, 2] `shouldBe` [0, 1, 2]
 
+    describe "onEnd" $
+      do
+        it "fires only once at the end of a stream." $
+          do
+            let 
+                pa = proc evx ->
+                  do
+                    x <- hold 0 -< evx
+                    ed <- onEnd -< evx
+                    returnA -< x <$ ed
+            run pa [1..4] `shouldBe` [4]
+
+    describe "sample" $
+      do
+        it "samples events in terms of the 2nd input." $
+          do
+            pendingWith "now many utilities behave incorrectly at the end of stream."
+{-
+            let
+                pa = proc evx ->
+                  do
+                    evy <- fork -< (\x -> [x, x]) <$> evx
+                    ys <- sample -< (evy, evx)
+                    ed <- onEnd -< evx
+                    outEv <- gather -< [() <$ evx, ed]
+                    returnA -< ys <$ outEv
+            Control.Monad.join (run pa [1..2]) `shouldBe` [1, 1, 2, 2]
+-}
+        it "correctly pushes simultaneous events into the same time." $
+          do
+            let 
+                pa = proc evx ->
+                  do
+                    l <- sample -< (evx, evx)
+                    returnA -< l <$ evx
+            run pa [1..3] `shouldBe` [[1], [2], [3]]
 
 switches =
   do
