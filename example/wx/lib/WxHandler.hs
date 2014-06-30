@@ -4,17 +4,24 @@
 {-# LANGUAGE RecursiveDo #-}
 
 module
-    WxHandler
+    WxHandler 
+      (
+        World,
+        on,
+        on0,
+        onInit,
+        wxReactimate
+      )
 where
 
 import qualified Control.Arrow.Machine as P
-import Control.Applicative ((<$>), (<*>), (<$))
+import Data.Functor ((<$>), (<$))
 import qualified Control.Category as Cat
 import Control.Arrow
 import Control.Arrow.ArrowIO
-import Control.Monad.State
 import Control.Monad
-import Debug.Trace
+
+import Unsafe.Coerce
 
 import qualified Graphics.UI.WX as Wx
 import Graphics.UI.WX (Prop ((:=)))
@@ -29,9 +36,11 @@ inclID (EventID n) = EventID (n+1)
 newID env =  Wx.varUpdate (envGetIDPool env) inclID
 
 
--- 実行環境
+-- Internal data.
+data Any
+
 type MainState a = P.ProcessA a
-                    (P.Event (EventID, EventArg)) (P.Event ())
+                    (P.Event (EventID, Any)) (P.Event ())
 
 data EventEnv a = EventEnv {
       envGetIDPool :: Wx.Var EventID,
@@ -39,22 +48,17 @@ data EventEnv a = EventEnv {
       envGetRun :: forall b c. a b c -> b -> IO c
     }
 
-data EventArg = EventNoArg | 
-                EventMouse Wx.EventMouse 
-    deriving Show
-
 data World a = World {
       worldGetEnv :: EventEnv a,
-      worldGetEvent :: P.Event (EventID, EventArg)
+      worldGetEvent :: P.Event (EventID, Any)
 }
 
 
 
--- イベントハンドリング
-listenID :: ArrowApply a =>
-            P.ProcessA a
-                 (World a, EventID)
-                 (P.Event EventArg)
+-- Internal functions.
+listenID :: 
+    ArrowApply a =>
+    P.ProcessA a (World a, EventID) (P.Event Any)
 listenID = proc (World _ etp, myID) ->
   do
      ret <- P.filter (arr fst) -< go myID <$> etp
@@ -64,21 +68,11 @@ listenID = proc (World _ etp, myID) ->
     go myID (curID, ea) = (curID == myID, ea)
 
 
-onInit :: (ArrowApply a) => 
-         P.ProcessA a (World a) (P.Event ())
-onInit = proc world -> 
-  do
-    ea <- listenID -< (world, initialID)
-    P.echo -< () <$ ea
-
-
-
-listen :: (ArrowIO a, ArrowApply a, Eq initArg) =>
-          a (EventArg -> IO (), initArg) () ->
-          a EventArg ev ->
-              P.ProcessA a
-                   (World a, initArg)
-                   (P.Event ev)
+listen :: 
+    (ArrowIO a, ArrowApply a, Eq w) =>
+    a (Any -> IO (), w) () ->
+    a Any ev -> 
+    P.ProcessA a (World a, w) (P.Event ev)
 listen reg getter = proc (world@(World env etp), ia) ->
   do
     initMsg <- P.edge -< ia
@@ -92,7 +86,6 @@ listen reg getter = proc (world@(World env etp), ia) ->
         P.anytime getter -< ea
 
 
-
 handleProc env eid arg =
   do
     stH <- Wx.varGet $ envGetState env
@@ -100,11 +93,46 @@ handleProc env eid arg =
     envGetState env `Wx.varSet` stH'
 
 
-wxReactimate :: (ArrowIO a, ArrowApply a) =>
-                (forall b c. a b c -> b -> IO c) ->
-                (P.ProcessA a
-                    (World a) (P.Event ())) -> 
-                IO ()
+-- |Fires once on initialization.
+onInit :: 
+    (ArrowApply a) => 
+    P.ProcessA a (World a) (P.Event ())
+onInit = proc world -> 
+  do
+    ea <- listenID -< (world, initialID)
+    P.echo -< () <$ ea
+
+
+-- |Fires on Wx event.
+on :: 
+    (Eq w, ArrowIO a, ArrowApply a) => 
+    Wx.Event w (arg -> IO ()) -> 
+    P.ProcessA a (World a, w) (P.Event arg)
+on signal = listen (arrIO2 regIO) (arr getter)
+  where
+    regIO handler w = 
+        Wx.set w [Wx.on signal := (handler . unsafeCoerce)]
+    getter = arr unsafeCoerce
+
+
+-- |No argument version of `on`.
+on0 :: 
+    (ArrowIO a, Arrow a, ArrowApply a, Eq w) =>
+    Wx.Event w (IO ()) -> 
+    P.ProcessA a (World a, w) (P.Event ())
+on0 signal = listen (arrIO2 regIO) (arr getter)
+  where
+    regIO handler w = 
+        Wx.set w [Wx.on signal := handler (unsafeCoerce ())]
+    getter = const ()
+
+
+-- |Actuate an event handling process.
+wxReactimate :: 
+    (ArrowIO a, ArrowApply a) =>
+    (forall b c. a b c -> b -> IO c) ->
+    P.ProcessA a (World a) (P.Event ()) -> 
+    IO ()
 wxReactimate run init = Wx.start go
   where
     go =
@@ -123,28 +151,4 @@ wxReactimate run init = Wx.start go
             let st = init'
 
 
-        handleProc env initialID EventNoArg
-
-
--- 個別のイベント(THで自動生成したい)
-onMouse :: (Wx.Reactive w, Eq w, ArrowIO a, ArrowApply a) => 
-         P.ProcessA a (World a, w) 
-              (P.Event WxC.EventMouse)
-onMouse = listen (arrIO2 regIO) (arr getter)
-  where
-    regIO handler w = Wx.set w [Wx.on Wx.mouse := (handler . EventMouse)]
-                   
-    getter (EventMouse x) = x
-    getter _ = error "Event mismatch (internal error)"
-
-
-
-onCommand :: (Wx.Commanding w, Eq w, ArrowIO a, ArrowApply a) => 
-         P.ProcessA a (World a, w) (P.Event ())
-onCommand = listen (arrIO2 regIO) (arr getter)
-  where
-    regIO handler w = Wx.set w [Wx.on Wx.command := (handler EventNoArg)]
-
-    getter = const ()
-          
-
+        handleProc env initialID (unsafeCoerce ())

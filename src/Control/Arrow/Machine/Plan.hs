@@ -36,13 +36,12 @@ import qualified Control.Monad.Trans.Free as F
 import Data.Monoid (mappend)
 import Control.Monad
 import Control.Arrow
-import Control.Applicative
 import Control.Monad.Trans
 import Debug.Trace
 
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
-
+import Control.Arrow.Machine.Event.Internal (Event(..))
 
 stopped :: 
     (ArrowApply a, Occasional c) => ProcessA a b c

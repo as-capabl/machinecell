@@ -20,6 +20,7 @@ import Data.Monoid (Monoid (..))
 
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
+import Control.Arrow.Machine.Event.Internal (Event(..))
 
 
 adv Feed = Sweep

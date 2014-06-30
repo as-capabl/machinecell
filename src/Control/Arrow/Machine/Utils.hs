@@ -60,6 +60,7 @@ import Debug.Trace
 
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
+import Control.Arrow.Machine.Event.Internal (Event(..))
 
 import qualified Control.Arrow.Machine.Plan as Pl
 
@@ -68,14 +69,8 @@ import qualified Control.Arrow.Machine.Plan as Pl
 
 
 delay :: 
-    (ArrowApply a, Occasional b) => ProcessA a b b
-delay = join >>> delayImpl >>> split
-  where
-    delayImpl = Pl.repeatedly $
-      do
-        x <- Pl.await
-        Pl.yield noEvent
-        Pl.yield x
+    (ArrowApply a) => ProcessA a (Event b) (Event b)
+delay = arr (\x -> Event [NoEvent, x]) >>> fork >>> split
 
 hold :: 
     ArrowApply a => b -> ProcessA a (Event b) b
@@ -91,9 +86,10 @@ hold old = proc evx ->
 
 accum ::
     ArrowApply a => b -> ProcessA a (Event (b->b)) b
-accum old = proc evf ->
+accum old = ProcessA $ proc (ph, evf) ->
   do
-    rSwitch (arr $ const old) -< ((), arr . const <$> (evf <*> pure old))
+    let new = fromEvent id evf old
+    returnA -< (ph `mappend` Suspend, new, accum new)
 
 edge :: 
     (ArrowApply a, Eq b) =>

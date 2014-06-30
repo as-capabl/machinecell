@@ -72,7 +72,8 @@ mkProc (PgPush next) = mc >>> mkProc next
          yield x
 
 mkProc (PgPop (fx, fy) fz) =
-    mc >>> P.split >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
+    mc >>> ((evMap fst >>> fork) &&& (evMap snd >>> fork))
+       >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
   where
     mc = repeatedlyT kleisli0 $
        do
@@ -81,11 +82,11 @@ mkProc (PgPop (fx, fy) fz) =
          case ys 
            of
              [] -> 
-                 yield (Event x, NoEvent)
+                 yield (Just x, Nothing)
              (y:yss) -> 
                do 
                  lift $ put yss
-                 yield (Event x, Event y)
+                 yield (Just x, Just y)
 
 mkProc (PgOdd next) = P.filter (arr cond) >>> mkProc next
   where
@@ -105,7 +106,7 @@ mkProcJ (PjFst pg) = arr fst
 mkProcJ (PjSnd pg) = arr snd
 mkProcJ (PjSum pg) = arr go
   where
-    go (evx, evy) = (+) <$> evx <*> evy
+    go (evx, evy) = (+ fromEvent 0 evy) <$> evx
 
 
 stateProc :: MyProcT (Event a) (Event b) -> [a] -> ([b], [Int])
@@ -146,13 +147,14 @@ instance
 instance
     (TestIn a, TestIn b) => TestIn (a, b)
   where
-    input = mc >>> P.split >>> input *** input
+    input = mc >>> 
+        ((evMap fst >>> fork >>> input) &&& (evMap snd >>> fork >>> input))
       where
         mc = repeatedly $
           do
             x <- await
             y <- await
-            yield (Event x, Event y)
+            yield (Just x, Just y)
 
 instance
     (TestOut a, TestOut b) => TestOut (a, b)

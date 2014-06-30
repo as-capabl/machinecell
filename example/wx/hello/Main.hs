@@ -41,11 +41,11 @@ machine = proc world ->
 
     (returnA -< form) `P.passRecent` \(MyForm f btnDlg btnQuit) ->
       do    
-        dialogMsg <- WxP.onCommand -< (world, btnDlg)
+        dialogMsg <- WxP.on0 Wx.command -< (world, btnDlg)
         P.anytime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
                 -< f <$ dialogMsg
 
-        quitMsg <- WxP.onCommand -< (world, btnQuit)
+        quitMsg <- WxP.on0 Wx.command -< (world, btnQuit)
         P.anytime (arrIO Wx.close) -< f <$ quitMsg
 
 

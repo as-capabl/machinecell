@@ -8,7 +8,7 @@ module
     Control.Arrow.Machine.Event 
       (
         Occasional (..),
-        Event (..), 
+        Event (), 
         hEv, 
         hEv', 
         evMaybe,
@@ -28,6 +28,8 @@ import Control.Applicative (Applicative(..), Alternative(..), (<$>))
 import Data.Foldable (Foldable(..))
 import Data.Traversable (Traversable(..))
 import Data.Monoid (mempty)
+import Control.Arrow.Machine.Event.Internal (Event(..))
+
 
 
 class 
@@ -52,7 +54,7 @@ instance
     isEnd (x, y) = isEnd x && isEnd y
 
 
-data Event a = Event a | NoEvent | End deriving (Eq, Show)
+
 
 instance 
     Occasional (Event a)
@@ -81,76 +83,6 @@ hEv' f1 f2 f3 = proc (e, ev) ->
     helper End = f3
 
 
-instance 
-    Functor Event 
-  where
-    fmap f NoEvent = NoEvent
-    fmap f End = End
-    fmap f (Event x) = Event (f x)
-
-
-instance 
-    Applicative Event 
-  where
-    pure = Event
-
-    (Event f) <*> (Event x) = Event $ f x
-    End <*> _ = End
-    _ <*> End = End
-    _ <*> _ = NoEvent
-
-
-instance
-    Foldable Event
-  where
-    foldMap f (Event x) = f x
-    foldMap _ NoEvent = mempty
-    foldMap _ End = mempty
-
-
-instance
-    Traversable Event
-  where
-    traverse f (Event x) = Event <$> f x
-    traverse f NoEvent = pure NoEvent
-    traverse f End = pure End
-
-
-instance
-    Alternative Event
-  where
-    empty = NoEvent
-    End <|> _ = End
-    _ <|> End = End
-    Event x <|> _ = Event x
-    NoEvent <|> r = r
-
-
-instance
-    Monad Event
-  where
-    return = Event
-
-    Event x >>= f = f x
-    NoEvent >>= _ = NoEvent
-    End >>= _ = End
-
-    _ >> End = End
-    l >> r = l >>= const r
-    
-    fail _ = End
-
-
-instance
-    MonadPlus Event
-  where
-    mzero = End
-
-    Event x `mplus` _ = Event x
-    _ `mplus` Event x = Event x
-    End `mplus` r = r
-    l `mplus` End = l
-    _ `mplus` _ = NoEvent
 
 
 evMaybe :: Arrow a => c -> (b->c) -> a (Event b) c
