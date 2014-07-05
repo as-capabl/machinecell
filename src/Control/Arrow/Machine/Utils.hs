@@ -14,6 +14,8 @@ module
         edge,
         passRecent,
         withRecent,
+        feedback1,
+        feedback,
 
         -- * Switches
         -- | Switches inspired by Yampa library.
@@ -67,10 +69,15 @@ import qualified Control.Arrow.Machine.Plan as Pl
 
 
 
-
-delay :: 
-    (ArrowApply a) => ProcessA a (Event b) (Event b)
-delay = arr (\x -> Event [NoEvent, x]) >>> fork >>> split
+delay ::
+    (ArrowApply a, Occasional b) => ProcessA a b b
+delay = join >>> delayImpl >>> split
+  where
+    delayImpl = Pl.repeatedly $
+      do
+        x <- Pl.await
+        Pl.yield noEvent
+        Pl.yield x
 
 hold :: 
     ArrowApply a => b -> ProcessA a (Event b) b
@@ -109,6 +116,7 @@ edge = ProcessA $ impl Nothing
 
 
 infixr 9 `passRecent`
+infixr 9 `feedback`
 
 passRecent :: 
     (ArrowApply a, Occasional o) =>
@@ -130,6 +138,64 @@ withRecent ::
     ProcessA a (e, Event b) o
 withRecent af = proc (e, evb) ->
     (returnA -< evb) `passRecent` (\b -> af -< (e, b))
+
+
+
+-- |Event version of loop (member of `ArrowLoop`).             
+-- Yielding an event to feedback output always creates a new process cycle.
+-- So be careful to make an infinite loop.
+feedback1 ::
+    (ArrowApply a, Occasional d) =>
+    ProcessA a (e, d) (c, d) ->
+    ProcessA a e c
+feedback1 pa = ProcessA $ proc (ph, e) ->
+  do
+    (ph', (y, d), pa') <- step pa -< (ph, (e, noEvent))
+    returnA -< (ph', y, cont ph' d pa')
+  where
+    cont phPrev d paC 
+        | isOccasion d = ProcessA $ proc (ph, e) ->
+          do
+            let 
+              (dIn, dOut, phPv2, phCur) = 
+                if ph == Suspend
+                  then
+                    (noEvent, const d, const phPrev, Suspend)
+                  else
+                    (d, id, id, ph `mappend` Feed)
+
+            (ph', (y, d'), pa') <- step paC -< (phCur, (e, dIn))
+            returnA -< (ph', y, cont (phPv2 ph') (dOut d') pa')
+
+        | isEnd d && phPrev == Feed = ProcessA $ proc (ph, e) ->
+          do
+            (ph', (y, _), pa') <- step pa -< (ph, (e, end))
+            returnA -< (ph', y, proc x -> arr fst <<< pa' -< (x, end))
+
+        | otherwise = feedback1 paC
+
+{-
+proc e ->
+  do
+    (y, _) <- kSwitch pa test eval -< (e, noEvent)
+    returnA -< y
+  where
+    test = 
+    eval pa' d = switch (yielder >>> 
+-}
+
+-- |Artificially split into two arrow to use binary operator notation
+-- rather than banana brackets.
+feedback ::
+    (ArrowApply a, Occasional d) =>
+    ProcessA a (e, d) b ->
+    ProcessA a (e, b) (c, d) ->
+    ProcessA a e c
+feedback pa pb = 
+    feedback1 $ proc (e, x) -> 
+      do 
+        y <- pa -< (e, x)
+        pb -< (e, y)
 
 
 --

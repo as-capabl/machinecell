@@ -36,6 +36,10 @@ type StepType a b c = a (Phase, b) (Phase, c, ProcessA a b c)
 -- To construct `ProcessA` instances, use `Control.Arrow.Machine.Plan.Plan`,
 -- `arr`, functions declared in `Control.Arrow.Machine.Utils`,
 -- or arrow combinations of them.
+--
+-- May use `ArrowChoice` and `ArrowLoop` instance too.
+-- but there is a limitation that `loop` cannot propagate `Event`s to upstream.
+-- In such case, use `Control.Arrow.Machine.Utils.feedback` instead.
 data ProcessA a b c = ProcessA { 
       step :: StepType a b c
     }
@@ -101,6 +105,8 @@ arrStep f = proc (ph, x) ->
     returnA -< (ph `mappend` Suspend, f x, ProcessA $ arrStep f)
 {-# INLINE [1] arrStep #-}
 
+
+-- |Composition is proceeded by the backtracking strategy.
 compositeStep :: ArrowApply a => 
               StepType a b d -> StepType a d c -> StepType a b c
 compositeStep f g = proc (ph, x) -> compositeStep' ph f g -<< (ph, x)

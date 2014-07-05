@@ -1,3 +1,9 @@
+1.1.0
+------------
+* Hide `Event` constructors and some instances (`Applicative`, `Monad`).
+* Added `feedback`
+* Fixed `accum`
+
 1.0,1
 ------------
 * Fix some bugs of core part.

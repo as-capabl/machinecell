@@ -27,8 +27,7 @@ runKI a x = runIdentity (runKleisli a x)
 
 
 
-
-main = hspec $ do {basics; rules; loops; choice; plans; utility; switches; execution}
+main = hspec $ do {basics; rules; loops; choice; plans; utility; switches; operator; execution}
 
 
 basics =
@@ -431,6 +430,43 @@ switches =
             ret `shouldBe` [7, 2, 4]
             retD `shouldBe` [7, 3, 4]
 -}
+
+operator = describe "Operators on ProcessA"$
+  do
+    describe "feedback" $
+      do
+        it "acts like local variable with hold." $
+          do
+            let 
+                pa = proc evx ->
+                  do
+                    (\evy -> hold 10 -< evy)
+                      `feedback` \y ->
+                      do
+                        returnA -< ((+y) <$> evx, (y+1) <$ evx)
+            run pa [1, 2, 3] `shouldBe` [11, 13, 15]
+
+        it "correctly handles stream end." $
+          do
+            let pa = proc x -> (| feedback1 (\y -> returnA -< (y::Event Int, x)) |)
+            let comp = mkProc (PgPush PgStop) >>> pa
+            stateProc comp [0, 0] `shouldBe` ([], [0])
+
+        it "correctly handles stream end.(2)" $
+          do
+            pendingWith "now many utilities behave incorrectly at the end of stream."
+{-
+            let pa = proc x -> (| feedback1 (\y -> returnA -< (y::Event Int, x)) |)
+            let comp = mkProc (PgPush PgStop) >>> pa >>> mkProc (PgDouble PgNop)
+            stateProc comp [0, 0] `shouldBe` ([], [0])
+
+        prop "delays the feedback input." $ \cond ->
+            let 
+                equiv = mkEquivTest cond
+              in
+                delay `equiv` proc x -> (| feedback1 (\y -> returnA -< (y::Event Int, x)) |)
+-}
+
 execution = describe "Execution of ProcessA" $
     do
       let
@@ -461,6 +497,21 @@ execution = describe "Execution of ProcessA" $
               (ret, _) = stepRun now2 1
           yields ret `shouldBe` ([]::[Int])
           hasStopped ret `shouldBe` True
+
+      it "supports step execution (2)" $ 
+          pendingWith "Correct stop handling"
+{-
+      prop "supports step execution (2)" $ \p l ->
+          let
+              pa = mkProc p
+              all pc (x:xs) ys = 
+                do
+                  (r, cont) <- runKleisli (stepRun pc) x
+                  all cont (if hasStopped r then [] else xs) (ys ++ yields r)
+              all pc [] ys = runKleisli (run pc) [] >>= return . (ys++)
+            in
+              runState (all pa (l::[Int]) []) [] == stateProc pa l
+-}          
 
       it "supports yield-driven step" $
         do
