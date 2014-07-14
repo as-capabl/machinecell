@@ -1,3 +1,7 @@
+1.1.1
+------------
+* Eliminated banana brackets to support newest GHC.
+
 1.1.0
 ------------
 * Hide `Event` constructors and some instances (`Applicative`, `Monad`).
