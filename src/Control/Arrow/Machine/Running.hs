@@ -97,6 +97,10 @@ stepRun pa = proc x ->
     returnA -< (ExecInfo { yields = ys2 [], hasConsumed = True, hasStopped = hsS } , pa'')
 
   where
+{-
+    -- Converted code below with arrowp.
+    -- Need refactoring overall this file, rather than rewrite here.
+
     go pa ys = step pa >>> proc (ph', evy, pa') ->
       do
         (| handle
@@ -105,6 +109,23 @@ stepRun pa = proc x ->
             (returnA -< (ys, pa', case evy of {End->True; _->False}))
          |)
             (ph', evy)
+-}
+    go pa ys
+          = step pa >>>
+              (arr (\ (ph', evy, pa') -> ((evy, pa', ph'), (ph', evy))) >>>
+                 handle
+                   (arr
+                      (\ ((evy, pa', ph'), y) ->
+                         (go pa' (\ cont -> ys (y : cont)), (adv ph', NoEvent)))
+                      >>> app)
+                   (arr (\ (evy, pa', ph') -> (go pa' ys, (adv ph', NoEvent))) >>>
+                      app)
+                   (arr
+                      (\ (evy, pa', ph') ->
+                         (ys, pa',
+                          case evy of
+                              End -> True
+                              _ -> False))))
 
                      
 stepYield :: 
@@ -115,15 +136,20 @@ stepYield ::
 stepYield pa = proc x ->
   do
     (my, pa', hsS) <- go pa -<< (Sweep, NoEvent)
-    (| handle2 
-        (returnA -< (ExecInfo { yields = my, hasConsumed = False, hasStopped = hsS}, pa'))
-        (do
-            (my2, pa'', hsS) <- go pa' -<< (Feed, (Event x))
-            returnA -< (ExecInfo { yields = my2, hasConsumed = True, hasStopped = hsS}, pa''))
-     |)
-        my
+    cont my pa' hsS -<< x
 
   where
+    cont (Just y) pa' hsS = proc _ ->
+        returnA -< (ExecInfo { yields = Just y, hasConsumed = False, hasStopped = hsS}, pa')
+
+    cont Nothing pa' hsS = proc x ->
+      do
+        (my2, pa'', hsS') <- go pa' -<< (Feed, (Event x))
+        returnA -< (ExecInfo { yields = my2, hasConsumed = True, hasStopped = hsS}, pa'')
+{-
+    -- Converted code below with arrowp.
+    -- Need refactoring overall this file, rather than rewrite here.
+
     go pa = step pa >>> proc (ph', evy, pa') ->
       do
         (| handle
@@ -132,8 +158,17 @@ stepYield pa = proc x ->
             (returnA -< (Nothing, pa', case evy of {End->True; _->False}))
          |)
             (ph', evy)
+-}
+    go pa = step pa >>>
+              (arr (\ (ph', evy, pa') -> ((evy, pa', ph'), (ph', evy))) >>>
+                 handle (arr (\ ((evy, pa', ph'), y) -> (Just y, pa', False)))
+                   (arr (\ (evy, pa', ph') -> (go pa', (adv ph', NoEvent))) >>> app)
+                   (arr
+                      (\ (evy, pa', ph') ->
+                         (Nothing, pa',
+                          case evy of
+                              End -> True
+                              _ -> False))))
 
 
-    handle2 f1 f2 = proc (e, mx) ->
-        maybe f2 (const f1) mx -<< e
 

@@ -132,12 +132,17 @@ passRecent af ag = proc e ->
       Just x -> ag -< (e, x)
       _ -> returnA -< noEvent
 
+-- No use for banana brackets since ghc 7.8.1
 withRecent :: 
     (ArrowApply a, Occasional o) =>
     ProcessA a (e, b) o ->
     ProcessA a (e, Event b) o
-withRecent af = proc (e, evb) ->
-    (returnA -< evb) `passRecent` (\b -> af -< (e, b))
+withRecent af = proc (e, evx) ->
+  do
+    mvx <- hold Nothing -< Just <$> evx
+    case mvx of
+      Just x -> af -< (e, x)
+      _ -> returnA -< noEvent
 
 
 
@@ -174,15 +179,6 @@ feedback1 pa = ProcessA $ proc (ph, e) ->
 
         | otherwise = feedback1 paC
 
-{-
-proc e ->
-  do
-    (y, _) <- kSwitch pa test eval -< (e, noEvent)
-    returnA -< y
-  where
-    test = 
-    eval pa' d = switch (yielder >>> 
--}
 
 -- |Artificially split into two arrow to use binary operator notation
 -- rather than banana brackets.
@@ -201,21 +197,15 @@ feedback pa pb =
 --
 -- Switches
 --
-hEvPh :: ArrowApply a => a (e,b) c -> a e c -> a (e, (Phase, Event b)) c
-hEvPh f1 f2 = proc (e, (ph, ev)) ->
-    helper ph ev -<< e
-  where
-    helper Feed (Event x) = proc e -> f1 -< (e, x)
-    helper _ _ = f2
+evMaybePh :: b -> (a->b) -> (Phase, Event a) -> b
+evMaybePh _ f (Feed, Event x) = f x
+evMaybePh d _ _ = d
 
 
-hEvPh' :: ArrowApply a => a (e,b) c -> a e c -> a e c -> a (e, (Phase, Event b)) c
-hEvPh' f1 f2 f3 = proc (e, (ph, ev)) ->
-    helper ph ev -<< e
+switchCore sw cur cont = sw cur (arr test) cont' >>> arr fst
   where
-    helper Feed (Event x) = proc e -> f1 -< (e, x)
-    helper Feed End = f3
-    helper _ _ = f2
+    test (_, (_, evt)) = evt
+    cont' _ t = cont t >>> arr (\y -> (y, noEvent))
 
 switch :: 
     ArrowApply a => 
@@ -223,14 +213,7 @@ switch ::
     (t -> ProcessA a b c) ->
     ProcessA a b c
 
-switch cur cont = ProcessA $ proc (ph, x) ->
-  do
-    (ph', (y, evt), new) <- step cur -< (ph, x)
-    (| hEvPh
-        (\t -> step (cont t) -<< (ph, x))
-        (returnA -< (ph', y, switch new cont))
-      |) 
-        (ph', evt)
+switch = switchCore kSwitch
 
 
 dSwitch :: 
@@ -239,14 +222,7 @@ dSwitch ::
     (t -> ProcessA a b c) ->
     ProcessA a b c
 
-dSwitch cur cont = ProcessA $ proc (ph, x) ->
-  do
-    (ph', (y, evt), new) <- step cur -< (ph, x)
-    
-    returnA -< (ph', y, next new evt)
-  where
-    next _ (Event t) = cont t
-    next new _ = dSwitch new cont
+dSwitch = switchCore dkSwitch
 
 
 rSwitch :: 
@@ -255,12 +231,8 @@ rSwitch ::
 
 rSwitch cur = ProcessA $ proc (ph, (x, eva)) -> 
   do
-    (ph', y, new) <- 
-        (| hEvPh
-            (\af -> step af -<< (ph, x))
-            (step cur -< (ph, x))
-         |)
-            (ph, eva)
+    let now = evMaybePh cur id (ph, eva)
+    (ph', y, new) <-  step now -<< (ph, x)
     returnA -< (ph', y, rSwitch new)
 
 
@@ -290,11 +262,12 @@ kSwitch sf test k = ProcessA $ proc (ph, x) ->
   do
     (ph', y, sf') <- step sf -< (ph, x)
     (phT, evt, test') <- step test -< (ph', (x, y))
-    (| hEvPh
-        (\t -> step $ k sf' t -<< (phT, x))
-        (returnA -< (phT, y, kSwitch sf' test' k))
-     |) 
+
+    evMaybePh 
+        (arr $ const (phT, y, kSwitch sf' test' k)) 
+        (step . (k sf'))
         (phT, evt)
+            -<< (phT, x)
 
 
 dkSwitch ::
@@ -379,12 +352,11 @@ pSwitch r sfs test k = ProcessA $ proc (ph, x) ->
     (ph', zs, sfs') <- parCore r sfs -<< (ph, x)
     (phT, evt, test') <- step test -< (ph', (x, zs))
 
-    (| hEvPh
-       (\t -> step $ k sfs' t -<< (ph, x))
-       (returnA -< (ph' `mappend` phT, zs, pSwitch r sfs' test' k))
-     |) 
-       (phT, evt)
-
+    evMaybePh
+        (arr $ const (ph' `mappend` phT, zs, pSwitch r sfs' test' k))
+        (step . (k sfs') )
+        (phT, evt)
+            -<< (ph, x)
 
 pSwitchB ::
     (ArrowApply a, Tv.Traversable col) =>
@@ -405,17 +377,9 @@ rpSwitch ::
 
 rpSwitch r sfs = ProcessA $ proc (ph, (x, evCont)) ->
   do
-    (ph', zs, sfs') <- parCore r sfs -<< (ph, x)
-
-    (| hEvPh
-       (\cont -> 
-         do
-           (ph'', ws, sfs'') <- parCore r (cont sfs') -<< (ph, x)
-           returnA -< (ph'' `mappend` Suspend, ws, rpSwitch r sfs'')
-         )
-       (returnA -< (ph' `mappend` Suspend, zs, rpSwitch r sfs'))
-     |) 
-       (ph', evCont)
+    let sfsNew = evMaybePh sfs ($sfs) (ph, evCont)
+    (ph', ws, sfs') <- parCore r sfsNew -<< (ph, x)
+    returnA -< (ph' `mappend` Suspend, ws, rpSwitch r sfs')
 
 
 rpSwitchB ::

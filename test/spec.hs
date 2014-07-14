@@ -413,23 +413,24 @@ switches =
       do
         it "switches any times" $
           do
-            pendingWith "to correct"
-{-
             let
                theArrow sw = proc evtp ->
                  do
-                   (evx, evarr) <- P.split -< evtp
+                   evx <- P.fork -< fst <$> evtp
+                   evarr <- P.fork -< snd <$> evtp
                    sw (arr $ fmap (+2)) -< (evx, evarr)
 
-               l = [(Event 5, NoEvent),
-                    (Event 1, Event (arr $ fmap (*2))),
-                    (Event 2, NoEvent)]
+               l = [(Just 5, Nothing),
+                    (Just 1, Just (arr $ fmap (*2))),
+                    (Just 3, Nothing),
+                    (Just 6, Just (arr $ fmap (*3))),
+                    (Just 7, Nothing)]
                ret = run (theArrow rSwitch) l
                retD = run (theArrow drSwitch) l
 
-            ret `shouldBe` [7, 2, 4]
-            retD `shouldBe` [7, 3, 4]
--}
+            ret `shouldBe` [7, 2, 6, 18, 21]
+            retD `shouldBe` [7, 3, 6, 12, 21]
+
 
 operator = describe "Operators on ProcessA"$
   do
@@ -437,6 +438,8 @@ operator = describe "Operators on ProcessA"$
       do
         it "acts like local variable with hold." $
           do
+            pendingWith "Arrow statement with argument broken."
+{-
             let 
                 pa = proc evx ->
                   do
@@ -445,12 +448,19 @@ operator = describe "Operators on ProcessA"$
                       do
                         returnA -< ((+y) <$> evx, (y+1) <$ evx)
             run pa [1, 2, 3] `shouldBe` [11, 13, 15]
-
+-}
         it "correctly handles stream end." $
           do
-            let pa = proc x -> (| feedback1 (\y -> returnA -< (y::Event Int, x)) |)
-            let comp = mkProc (PgPush PgStop) >>> pa
+            pendingWith "Arrow statement with argument broken."
+{-
+            let 
+                pa = proc x -> 
+                    (\x -> returnA -< x)
+                  `feedback` 
+                    (\y -> returnA -< (y::Event Int, x))
+                comp = mkProc (PgPush PgStop) >>> pa
             stateProc comp [0, 0] `shouldBe` ([], [0])
+-}
 
         it "correctly handles stream end.(2)" $
           do

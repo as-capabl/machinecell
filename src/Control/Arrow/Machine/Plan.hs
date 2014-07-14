@@ -91,6 +91,12 @@ constructT fit pl = ProcessA $ proc (ph, evx) ->
     
 
   where
+
+    feedTo f = proc x ->
+      do
+        ff2 <- fit (F.runFreeT (f x)) -<< ()
+        oneYieldPF fit Feed ff2 -<< ()
+
     probe Suspend pl = proc _ ->
         returnA -< (Suspend, NoEvent, constructT fit pl)
         
@@ -99,17 +105,8 @@ constructT fit pl = ProcessA $ proc (ph, evx) ->
         pfr <- fit (F.runFreeT pl) -< ()
         go ph pfr -<< evx
 
-
-    go Feed (F.Free (AwaitPF f)) = proc evx ->
-      do
-        (| hEv'
-            (\x -> 
-              do
-                ff2 <- fit (F.runFreeT (f x)) -<< ()
-                oneYieldPF fit Feed ff2 -<< ())
-            (returnA -< (Feed, NoEvent, constructT fit (await_ f)))
-            (returnA -< (Feed, End, stopped))
-           |) evx
+    go Feed (F.Free (AwaitPF f)) = arr (\evx -> ((), evx)) >>>
+        hEv' (arr snd >>> feedTo f) (arr $ const (Feed, NoEvent, constructT fit (await_ f))) (arr $ const (Feed, End, stopped))
 
     go ph pfr = proc evx ->
         oneYieldPF fit ph pfr -< ()
