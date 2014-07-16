@@ -68,7 +68,7 @@ machine = proc world ->
     setup = 
       do
         f <- Wx.frame [Wx.text := "Take stones"]
-        lbl <- Wx.staticText f [Wx.text := "A player who take the last stone will lose."]
+        lbl <- Wx.staticText f [Wx.text := "A player who takes the last stone will lose."]
         cntr <- Wx.staticText f [Wx.text := "000"]
 
         btns <- forM [1, 2, 3] $ \i ->
@@ -126,7 +126,7 @@ game f = P.constructT arrIO0 $
             cpuTook = if cpuTook' == 0 then 1 else cpuTook' -- CPUが取る石
             nFin = if n' <= 0 then n' else n' - cpuTook
             msg = "You took " ++ show youTook ++ 
-                if n' > 0 then ", cpu took" ++ show cpuTook ++ "."
+                if n' > 0 then ", CPU took " ++ show cpuTook ++ "."
                           else "."
 
         -- ここでyield(ラベルを更新してからダイアログを出すため)
@@ -135,7 +135,7 @@ game f = P.constructT arrIO0 $
         -- ダイアログの表示(別にコルーチンの中でする必要はないが、デモとして)
         if n' <= 0 then
           do
-            lift $ Wx.infoDialog f "Game over" "You loose."
+            lift $ Wx.infoDialog f "Game over" "You lose."
             P.yield (Nothing, "New game.")
 
           else if n' - cpuTook <= 0 then

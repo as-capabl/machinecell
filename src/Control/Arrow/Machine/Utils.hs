@@ -63,9 +63,10 @@ import Debug.Trace
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Event.Internal (Event(..))
+import Control.Arrow.Machine.ArrowUtil
 
 import qualified Control.Arrow.Machine.Plan as Pl
-
+import Control.Arrow.Machine.Exception
 
 
 
@@ -75,9 +76,9 @@ delay = join >>> delayImpl >>> split
   where
     delayImpl = Pl.repeatedly $
       do
-        x <- Pl.await
+        mx <- liftM Just Pl.await `catch` return Nothing
         Pl.yield noEvent
-        Pl.yield x
+        maybe Pl.stop Pl.yield mx
 
 hold :: 
     ArrowApply a => b -> ProcessA a (Event b) b
@@ -120,28 +121,27 @@ infixr 9 `feedback`
 
 passRecent :: 
     (ArrowApply a, Occasional o) =>
-    ProcessA a e (Event b) ->
-    ProcessA a (e, b) o ->
-    ProcessA a e o
+    ProcessA a (AS e) (Event b) ->
+    ProcessA a (e, AS b) o ->
+    ProcessA a (AS e) o
 
-passRecent af ag = proc e ->
+passRecent af ag = proc ase ->
   do
-    evx <- af -< e
+    evx <- af -< ase
     mvx <- hold Nothing -< Just <$> evx
     case mvx of
-      Just x -> ag -< (e, x)
+      Just x -> ag -< (fromAS ase, toAS x)
       _ -> returnA -< noEvent
 
--- No use for banana brackets since ghc 7.8.1
 withRecent :: 
     (ArrowApply a, Occasional o) =>
-    ProcessA a (e, b) o ->
-    ProcessA a (e, Event b) o
-withRecent af = proc (e, evx) ->
+    ProcessA a (e, AS b) o ->
+    ProcessA a (e, AS (Event b)) o
+withRecent af = proc (e, asevx) ->
   do
-    mvx <- hold Nothing -< Just <$> evx
+    mvx <- hold Nothing -< Just <$> fromAS asevx
     case mvx of
-      Just x -> af -< (e, x)
+      Just x -> af -< (e, toAS x)
       _ -> returnA -< noEvent
 
 
@@ -151,15 +151,15 @@ withRecent af = proc (e, evx) ->
 -- So be careful to make an infinite loop.
 feedback1 ::
     (ArrowApply a, Occasional d) =>
-    ProcessA a (e, d) (c, d) ->
-    ProcessA a e c
-feedback1 pa = ProcessA $ proc (ph, e) ->
+    ProcessA a (e, AS d) (c, d) ->
+    ProcessA a (AS e) c
+feedback1 pa = ProcessA $ proc (ph, ase) ->
   do
-    (ph', (y, d), pa') <- step pa -< (ph, (e, noEvent))
+    (ph', (y, d), pa') <- step pa -< (ph, (fromAS ase, toAS noEvent))
     returnA -< (ph', y, cont ph' d pa')
   where
     cont phPrev d paC 
-        | isOccasion d = ProcessA $ proc (ph, e) ->
+        | isOccasion d = ProcessA $ proc (ph, ase) ->
           do
             let 
               (dIn, dOut, phPv2, phCur) = 
@@ -169,13 +169,13 @@ feedback1 pa = ProcessA $ proc (ph, e) ->
                   else
                     (d, id, id, ph `mappend` Feed)
 
-            (ph', (y, d'), pa') <- step paC -< (phCur, (e, dIn))
+            (ph', (y, d'), pa') <- step paC -< (phCur, (fromAS ase, toAS dIn))
             returnA -< (ph', y, cont (phPv2 ph') (dOut d') pa')
 
-        | isEnd d && phPrev == Feed = ProcessA $ proc (ph, e) ->
+        | isEnd d && phPrev == Feed = ProcessA $ proc (ph, ase) ->
           do
-            (ph', (y, _), pa') <- step pa -< (ph, (e, end))
-            returnA -< (ph', y, proc x -> arr fst <<< pa' -< (x, end))
+            (ph', (y, _), pa') <- step paC -< (ph, (fromAS ase, toAS end))
+            returnA -< (ph', y, proc asx -> arr fst <<< pa' -< (fromAS asx, toAS end))
 
         | otherwise = feedback1 paC
 
@@ -184,14 +184,14 @@ feedback1 pa = ProcessA $ proc (ph, e) ->
 -- rather than banana brackets.
 feedback ::
     (ArrowApply a, Occasional d) =>
-    ProcessA a (e, d) b ->
-    ProcessA a (e, b) (c, d) ->
-    ProcessA a e c
+    ProcessA a (e, AS d) b ->
+    ProcessA a (e, AS b) (c, d) ->
+    ProcessA a (AS e) c
 feedback pa pb = 
-    feedback1 $ proc (e, x) -> 
+    feedback1 $ proc (ase, x) -> 
       do 
-        y <- pa -< (e, x)
-        pb -< (e, y)
+        y <- pa -< (ase, x)
+        pb -< (ase, toAS y)
 
 
 --

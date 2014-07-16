@@ -14,6 +14,9 @@ module
         evMaybe,
         fromEvent,
         evMap,
+
+        -- * Deprecated
+        -- | To be renamed.
         split,
         join,
         split2,

@@ -324,7 +324,19 @@ plans = describe "Plan" $
             result = run (repeatedly pl) l
         result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
 
+    it "can handle the end with catch." $
+      do
+        let pl2 =
+              do
+                x <- await `catch` (yield 1 >> stop)
+                yield x
+                y <- await 
+                yield y
 
+        run (construct pl2) [] `shouldBe` [1]
+        run (construct pl2) [3] `shouldBe` [3]
+        run (construct pl2) [3, 2] `shouldBe` [3, 2]
+            
 utility =
   do
     describe "delay" $
@@ -438,8 +450,6 @@ operator = describe "Operators on ProcessA"$
       do
         it "acts like local variable with hold." $
           do
-            pendingWith "Arrow statement with argument broken."
-{-
             let 
                 pa = proc evx ->
                   do
@@ -448,19 +458,16 @@ operator = describe "Operators on ProcessA"$
                       do
                         returnA -< ((+y) <$> evx, (y+1) <$ evx)
             run pa [1, 2, 3] `shouldBe` [11, 13, 15]
--}
+
         it "correctly handles stream end." $
           do
-            pendingWith "Arrow statement with argument broken."
-{-
             let 
                 pa = proc x -> 
-                    (\x -> returnA -< x)
+                    (\asx -> returnA -< asx)
                   `feedback` 
-                    (\y -> returnA -< (y::Event Int, x))
+                    (\asy -> returnA -< (asy::Event Int, x))
                 comp = mkProc (PgPush PgStop) >>> pa
             stateProc comp [0, 0] `shouldBe` ([], [0])
--}
 
         it "correctly handles stream end.(2)" $
           do

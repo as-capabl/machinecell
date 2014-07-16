@@ -34,6 +34,7 @@ import qualified Control.Category as Cat
 import qualified Control.Monad.Trans.Free as F
 
 import Data.Monoid (mappend)
+import Data.Functor ((<$>))
 import Control.Monad
 import Control.Arrow
 import Control.Monad.Trans
@@ -43,38 +44,28 @@ import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Event.Internal (Event(..))
 
+import Control.Arrow.Machine.Plan.Internal
+
 stopped :: 
     (ArrowApply a, Occasional c) => ProcessA a b c
 stopped = arr (const end)
 
 
 
-data PlanF i o a where
-  AwaitPF :: (i->a) -> PlanF i o a
-  YieldPF :: o -> a -> PlanF i o a
-  StopPF :: a -> PlanF i o a
-
-instance (Functor (PlanF i o)) where
-  fmap g (AwaitPF f) = AwaitPF (g . f)
-  fmap g (YieldPF x r) = YieldPF x (g r)
-  fmap g (StopPF r) = StopPF (g r)
-
-
-type PlanT i o m a = F.FreeT (PlanF i o) m a
-type Plan i o a = forall m. Monad m => PlanT i o m a
 
 
 yield :: o -> Plan i o ()
 yield x = F.liftF $ YieldPF x ()
 
 await_ :: Monad m => (i->PlanT i o m a) -> PlanT i o m a
-await_ f = F.FreeT $ return $ F.Free $ AwaitPF f
+await_ f = F.FreeT $ return $ F.Free $ (AwaitPF f stop)
 
 await :: Plan i o i
 await = await_ return
 
-stop :: Plan i o ()
-stop = F.liftF $ StopPF ()
+stop :: Plan i o a
+stop = F.liftF $ StopPF
+
 
 
 
@@ -89,12 +80,10 @@ constructT fit pl = ProcessA $ proc (ph, evx) ->
   do
     probe ph pl -<< evx
     
-
   where
-
-    feedTo f = proc x ->
+    runAndYield fx = proc _ ->
       do
-        ff2 <- fit (F.runFreeT (f x)) -<< ()
+        ff2 <- fit (F.runFreeT fx) -<< ()
         oneYieldPF fit Feed ff2 -<< ()
 
     probe Suspend pl = proc _ ->
@@ -105,11 +94,16 @@ constructT fit pl = ProcessA $ proc (ph, evx) ->
         pfr <- fit (F.runFreeT pl) -< ()
         go ph pfr -<< evx
 
-    go Feed (F.Free (AwaitPF f)) = arr (\evx -> ((), evx)) >>>
-        hEv' (arr snd >>> feedTo f) (arr $ const (Feed, NoEvent, constructT fit (await_ f))) (arr $ const (Feed, End, stopped))
+    go Feed (F.Free (AwaitPF f ff)) = arr (\evx -> ((), evx)) >>>
+        hEv' (proc (_, x) -> runAndYield (f x) -<< ()) 
+             (arr $ const (Feed, NoEvent, constructT fit (await_ f))) 
+             (proc _ -> runAndYield ff -<< ())
 
     go ph pfr = proc evx ->
-        oneYieldPF fit ph pfr -< ()
+      do
+        let action = case (evx, pfr) of {(End, F.Free (AwaitPF _ ff)) -> ff; _ -> F.FreeT $ return pfr}
+        pfr' <- fit (F.runFreeT action) -<< ()
+        oneYieldPF fit ph pfr' -<< ()
 
 
 oneYieldPF :: (Monad m, ArrowApply a) => 
@@ -126,7 +120,7 @@ oneYieldPF f Suspend pfr = proc _ ->
 oneYieldPF f ph (F.Free (YieldPF x cont)) = proc _ ->
     returnA -< (Feed, Event x, constructT f cont)
 
-oneYieldPF f ph (F.Free (StopPF cont)) = proc _ ->
+oneYieldPF f ph (F.Free StopPF) = proc _ ->
     returnA -< (ph `mappend` Suspend, End, stopped)
 
 oneYieldPF f ph (F.Free pf) = proc _ ->

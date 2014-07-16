@@ -1,4 +1,4 @@
-
+{-# LANGUAGE CPP #-}
 module
     Control.Arrow.Machine.ArrowUtil (
         kleisli,
@@ -6,11 +6,36 @@ module
         kleisli2,
         kleisli3,
         kleisli4,
-        kleisli5
+        kleisli5,
+        AS,
+        toAS,
+        fromAS
     )
 where
 
 import Control.Arrow
+
+#if __GLASGOW_HASKELL__ >= 708
+
+type AS e = (e, ())
+
+toAS :: e -> AS e
+toAS e = (e, ())
+
+fromAS :: AS e -> e
+fromAS = fst
+
+#else
+
+type AS e = e
+
+toAS :: e -> AS e
+toAS = id
+
+fromAS :: AS e -> e
+fromAS = id
+
+#endif
 
 
 kleisli :: Monad m => (a->m b) -> Kleisli m a b

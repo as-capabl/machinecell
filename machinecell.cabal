@@ -21,8 +21,8 @@ description:
 	AFRP-like utilities are also available.
 
 library
-  exposed-modules:     Control.Arrow.Machine, Control.Arrow.Machine.Event, Control.Arrow.Machine.Plan, Control.Arrow.Machine.Types, Control.Arrow.Machine.Utils, Control.Arrow.Machine.Running, Control.Arrow.Machine.ArrowUtil
-  other-modules:         Control.Arrow.Machine.Event.Internal
+  exposed-modules:     Control.Arrow.Machine, Control.Arrow.Machine.Event, Control.Arrow.Machine.Plan, Control.Arrow.Machine.Types, Control.Arrow.Machine.Utils, Control.Arrow.Machine.Running, Control.Arrow.Machine.ArrowUtil, Control.Arrow.Machine.Exception, Control.Arrow.Machine.Core
+  other-modules:         Control.Arrow.Machine.Event.Internal, Control.Arrow.Machine.Plan.Internal
   other-extensions:    FlexibleInstances, Arrows, RankNTypes, TypeSynonymInstances, MultiParamTypeClasses, GADTs, FlexibleContexts, NoMonomorphismRestriction, RecursiveDo
   build-depends:       base >=4.0 && < 5.0, mtl >=2.0, free >=3.0 && < 5.0, profunctors >=3.0
   hs-source-dirs:      src
