@@ -1,6 +1,10 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 module
     Control.Arrow.Machine.Types
     -- This file includes internals. Export definitions is at ../Machine.hs
@@ -9,6 +13,8 @@ where
 import qualified Control.Category as Cat
 import Data.Monoid (Monoid(..))
 import Data.Profunctor (Profunctor, dimap)
+import Control.Arrow.Operations (ArrowReader(..))
+import Control.Arrow.Transformer.Reader (ReaderArrow, runReader, ArrowAddReader(..))
 import Control.Arrow
 
 
@@ -183,3 +189,37 @@ instance
             returnA -< ((ph', y, loop pa'), d')
 
 
+instance
+    (ArrowApply a, ArrowReader r a) => 
+    ArrowReader r (ProcessA a)
+  where
+    readState = ProcessA $ proc (ph, dm) ->
+      do
+        r <- readState -< dm
+        returnA -< (ph `mappend` Suspend, r, readState)
+
+    newReader pa = ProcessA $ proc (ph, (e, r)) ->
+      do
+        (ph', y, pa') <- newReader (step pa) -< ((ph, e), r)
+        returnA -< (ph', y, newReader pa')
+
+instance
+    (ArrowApply a, ArrowApply a', ArrowAddReader r a a') =>
+    ArrowAddReader r (ProcessA a) (ProcessA a')
+  where
+    liftReader pa = ProcessA $ proc (ph, x) ->
+      do
+        (ph', y, pa') <- (| liftReader (step pa -< (ph, x)) |)
+        returnA -< (ph', y, liftReader pa)
+
+    elimReader pra = 
+        ProcessA $ arr pre >>> elimReader (step pra) >>> arr post
+      where
+        pre (ph, (x, r)) = ((ph, x), r)
+        post (ph, x, pra') = (ph, x, elimReader pra')
+{-
+    elimReader pra = ProcessA $ proc (ph, (x, r)) ->
+      do
+        (ph', y, pra') <- (| elimReader (step pra -< (ph, x)) |) r
+        returnA -< (ph', y, elimReader pra')
+-}

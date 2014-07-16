@@ -1,4 +1,8 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE Arrows #-}
+
+
 module
     Control.Arrow.Machine.ArrowUtil (
         kleisli,
@@ -7,14 +11,23 @@ module
         kleisli3,
         kleisli4,
         kleisli5,
+
         AS,
         toAS,
-        fromAS
+        fromAS,
+
+        reading,
+
+        elimR
     )
 where
 
 import Control.Arrow
+import Control.Arrow.Operations (readState)
+import Control.Arrow.Transformer.Reader
+import Control.Monad.Reader (ReaderT, runReaderT)
 
+-- To absorve 
 #if __GLASGOW_HASKELL__ >= 708
 
 type AS e = (e, ())
@@ -57,3 +70,18 @@ kleisli5 :: Monad m => (a1 -> a2 -> a3 -> a4 -> a5 -> m b) -> Kleisli m (a1, a2,
 kleisli5 fmx = Kleisli $ \(x1, x2, x3, x4, x5) -> fmx x1 x2 x3 x4 x5
 
 
+reading :: 
+    (Monad m, Arrow a) => 
+    (forall p q. (p->m q)->a p q) -> 
+    (b -> ReaderT r m c) -> ReaderArrow r a b c
+reading f mr = proc x ->
+  do
+    r <- readState -< ()
+    liftReader (f $ \(x, r) -> runReaderT (mr x) r) -< (x, r)
+
+
+elimR ::
+    ArrowAddReader r a a' =>
+    a (AS e) b -> a' (e, AS r) b
+elimR f =
+    second (arr $ fromAS) >>> elimReader (arr toAS >>> f)

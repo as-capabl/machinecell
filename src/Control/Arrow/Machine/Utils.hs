@@ -3,7 +3,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE GADTs #-}
+
 module
     Control.Arrow.Machine.Utils
       (
@@ -57,6 +57,7 @@ import qualified Control.Category as Cat
 import Control.Monad (liftM, forever)
 import Control.Monad.Trans
 import Control.Arrow
+import Control.Arrow.Transformer.Reader (ReaderArrow, runReader)
 import Control.Applicative
 import Debug.Trace
 
@@ -389,7 +390,6 @@ rpSwitchB ::
         (col c)
 
 rpSwitchB = rpSwitch broadcast
-
 
 --
 -- other utility arrow
