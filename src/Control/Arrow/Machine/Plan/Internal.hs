@@ -6,6 +6,7 @@ module
 where
 
 import qualified Control.Monad.Trans.Free as F
+import qualified Control.Monad.Trans.Free.Church as F
 
 data PlanF i o a where
   AwaitPF :: (i->a) -> a -> PlanF i o a
@@ -18,5 +19,5 @@ instance (Functor (PlanF i o)) where
   fmap g StopPF = StopPF
 
 
-type PlanT i o m a = F.FreeT (PlanF i o) m a
+type PlanT i o m a = F.FT (PlanF i o) m a
 type Plan i o a = forall m. Monad m => PlanT i o m a

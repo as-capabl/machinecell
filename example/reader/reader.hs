@@ -10,7 +10,7 @@ import Control.Monad.Trans (lift)
 mainPlan = P.constructT (P.reading P.kleisli . const) $
   do
 	(a, y) <- ask
-	lift $ lift $ putStrLn $ "a" ++ show (a, y)
+	lift $ lift $ putStrLn $ "a" ++ show (a::Int, y::Int)
 	P.await
 	(a, y) <- ask
 	lift $ lift $ putStrLn $ "b" ++ show (a, y)

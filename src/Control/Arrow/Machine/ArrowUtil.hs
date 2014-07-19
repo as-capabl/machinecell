@@ -3,8 +3,10 @@
 {-# LANGUAGE Arrows #-}
 
 
+-- | Arrow utilities not related to machinecell library.
 module
     Control.Arrow.Machine.ArrowUtil (
+        -- * Arrow construction helper
         kleisli,
         kleisli0,
         kleisli2,
@@ -12,11 +14,12 @@ module
         kleisli4,
         kleisli5,
 
+        reading,
+
+        -- * To absorve arrow stack signature difference bettween ghc 7.8 and older.
         AS,
         toAS,
         fromAS,
-
-        reading,
 
         elimR
     )
@@ -27,7 +30,6 @@ import Control.Arrow.Operations (readState)
 import Control.Arrow.Transformer.Reader
 import Control.Monad.Reader (ReaderT, runReaderT)
 
--- To absorve 
 #if __GLASGOW_HASKELL__ >= 708
 
 type AS e = (e, ())
@@ -79,7 +81,7 @@ reading f mr = proc x ->
     r <- readState -< ()
     liftReader (f $ \(x, r) -> runReaderT (mr x) r) -< (x, r)
 
-
+-- |Alternate for `elimReader` that can be used with both ghc 7.8 and older.
 elimR ::
     ArrowAddReader r a a' =>
     a (AS e) b -> a' (e, AS r) b

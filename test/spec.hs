@@ -336,7 +336,7 @@ plans = describe "Plan" $
         run (construct pl2) [] `shouldBe` [1]
         run (construct pl2) [3] `shouldBe` [3]
         run (construct pl2) [3, 2] `shouldBe` [3, 2]
-            
+
 utility =
   do
     describe "delay" $

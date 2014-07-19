@@ -1,4 +1,5 @@
 
+
 module
     Control.Arrow.Machine.Exception
       (
@@ -13,6 +14,7 @@ module
 where
 
 import qualified Control.Monad.Trans.Free as F
+import qualified Control.Monad.Trans.Free.Church as F
 
 import Data.Functor ((<$>))
 
@@ -25,19 +27,23 @@ import Control.Arrow.Machine.Plan
 
 import Debug.Trace
 
+
 catch :: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
 
-catch (F.FreeT mf) cont@(F.FreeT mcont) = 
+catch pl cont = 
+    F.toFT $ catch' (F.fromFT pl) (F.fromFT cont)
+
+catch' (F.FreeT mf) cont@(F.FreeT mcont) = 
     F.FreeT $ mf >>= go
   where
     go (F.Pure a) = return $ F.Pure a
     go (F.Free StopPF) = mcont
     go (F.Free (AwaitPF f ff)) = 
         return $ F.Free $ 
-        AwaitPF (\i -> f i `catch` cont) (ff `catch` cont)
+        AwaitPF (\i -> f i `catch'` cont) (ff `catch'` cont)
     go (F.Free fft) = 
-        return $ F.Free $ (`catch` cont) <$> fft
+        return $ F.Free $ (`catch'` cont) <$> fft
 
 handle :: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
@@ -89,3 +95,4 @@ onException thing after =
   do
     thing `catch` (after >> stop)
     
+

@@ -32,6 +32,7 @@ where
 
 import qualified Control.Category as Cat
 import qualified Control.Monad.Trans.Free as F
+import qualified Control.Monad.Trans.Free.Church as F
 
 import Data.Monoid (mappend)
 import Data.Functor ((<$>))
@@ -57,11 +58,8 @@ stopped = arr (const end)
 yield :: o -> Plan i o ()
 yield x = F.liftF $ YieldPF x ()
 
-await_ :: Monad m => (i->PlanT i o m a) -> PlanT i o m a
-await_ f = F.FreeT $ return $ F.Free $ (AwaitPF f stop)
-
 await :: Plan i o i
-await = await_ return
+await = F.FT $ \pure free -> free (AwaitPF pure (free StopPF))
 
 stop :: Plan i o a
 stop = F.liftF $ StopPF
@@ -76,7 +74,53 @@ constructT :: (Monad m, ArrowApply a) =>
               PlanT i o m r -> 
               ProcessA a (Event i) (Event o)
 
-constructT fit pl = ProcessA $ proc (ph, evx) ->
+constructT fit pl = ProcessA $ fit' $ F.runFT pl pure free
+  where
+    fit' ma = proc arg -> do { (evx, pa) <- fit ma -< (); modFit evx pa -<< arg }
+    
+    modFit :: ArrowApply a => Event c -> StepType a b (Event c) -> StepType a b (Event c)
+    modFit (Event x) stp = retArrow Feed (Event x) (ProcessA stp)
+    modFit _ stp = stp
+
+    retArrow ph' evx cont = arr $ \(ph, _) -> 
+        case ph of
+          Suspend -> 
+              (ph `mappend` Suspend, NoEvent, ProcessA $ retArrow ph' evx cont)
+          _ -> 
+              (ph `mappend` ph', evx, cont)
+
+    pure _ = return $ (End, retArrow Suspend End stopped)
+
+    free (AwaitPF f ff) =
+      do
+        return $ (NoEvent, arr (uncurry (awaitIt f ff)) >>> proc pc -> pc -<< ())
+
+    free (YieldPF y fc) = return $ (Event y, fit' fc)
+
+    free StopPF = return $ (End, retArrow Suspend End stopped)
+
+
+    awaitIt f _ Feed (Event x) = proc _ ->
+      do
+        (evy, stp) <- fit (f x) -< ()
+        returnA -< (Feed, evy, ProcessA stp)
+
+    awaitIt _ ff Feed End = proc _ ->
+      do
+        (evy, stp) <- fit ff -< ()
+        returnA -< (Feed, evy, ProcessA stp)
+
+    awaitIt _ ff Sweep End = proc _ ->
+      do
+        (evy, stp) <- fit ff -< ()
+        returnA -< (if isOccasion evy then Feed else Suspend, evy, ProcessA stp)
+
+    awaitIt f ff ph evx = proc _ ->
+        returnA -< (ph `mappend` Suspend, NoEvent, 
+                    ProcessA $ arr (uncurry (awaitIt f ff)) >>> proc pc -> pc -<< ())
+
+{-
+ProcessA $ proc (ph, evx) ->
   do
     probe ph pl -<< evx
     
@@ -130,7 +174,7 @@ oneYieldPF f ph (F.Free pf) = proc _ ->
 
 oneYieldPF f ph (F.Pure x) = proc _ ->
     returnA -< (ph `mappend` Suspend, End, stopped)
-
+-}
 
 repeatedlyT :: (Monad m, ArrowApply a) => 
               (forall b. m b -> a () b) ->

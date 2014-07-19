@@ -1,3 +1,10 @@
+1.2.0
+------------
+* Support of `ArrowReader`.
+* Added await fail handling.
+* Improved performance by church-encoded free monads.
+* Arrow stack of newest GHC support for some utilities.
+
 1.1.1
 ------------
 * Eliminated banana brackets to support newest GHC.

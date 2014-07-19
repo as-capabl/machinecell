@@ -73,6 +73,7 @@ import Control.Arrow.Machine.Exception
 
 delay ::
     (ArrowApply a, Occasional b) => ProcessA a b b
+
 delay = join >>> delayImpl >>> split
   where
     delayImpl = Pl.repeatedly $
@@ -80,6 +81,7 @@ delay = join >>> delayImpl >>> split
         mx <- liftM Just Pl.await `catch` return Nothing
         Pl.yield noEvent
         maybe Pl.stop Pl.yield mx
+
 
 hold :: 
     ArrowApply a => b -> ProcessA a (Event b) b
