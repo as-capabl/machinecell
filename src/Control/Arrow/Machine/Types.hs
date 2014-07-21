@@ -46,23 +46,11 @@ newtype StepView a b c = StepView {
     viewStep :: StepType a b c
 }
 
-instance
-    ArrowApply a => Cat.Category (StepView a)
-  where
-    id = StepView $ arrStep Cat.id
-    v2 . v1 = StepView $ compositeStep (viewStep v1) (viewStep v2)
-
 data CachedSV a b c = CachedSV {
     viewStepC :: StepType a b c,
     cached :: b
 }
 
-
-foldTas :: 
-    Vw.Uncons t => 
-    (forall p q r. a p q -> a q r -> a' p r) ->
-    t a b c -> a' b c
-foldTas = undefined
 
 -- | The stream transducer arrow.
 --
@@ -95,17 +83,17 @@ seqStep ::
     a b (Phase, c, ProcessA a b c)
 seqStep Feed tas = proc x ->
   do
-    (y, tas') <- traverseStep Feed tas Cat.id -< x
+    (y, tas') <- traverseStep Feed tas -< x
     returnA -< (Feed, y, ProcessSeq tas')
 
 seqStep Suspend tas = proc x ->
   do
-    (y, tas') <- traverseStep Suspend tas Cat.id -< x
+    (y, tas') <- traverseStep Suspend tas -< x
     returnA -< (Suspend, y, ProcessSeq tas')
 
 seqStep Sweep tas = proc x ->
   do
-    (yC, tasC) <- makeCache Suspend tas Cat.id -< x
+    (yC, tasC) <- makeCache Suspend tas -< x
     (my, tas') <- seqSweepStep Cat.id tasC -<< x
     returnA -< case my
       of
@@ -115,25 +103,43 @@ seqStep Sweep tas = proc x ->
         (Suspend, yC, ProcessSeq tas')
 
 
-    
+
 
 traverseStep ::
     ArrowApply a =>
     Phase ->
-    (TAS.Cat (StepView a) d c) -> 
-    (TAS.Cat (StepView a) b d) ->
-    a d (c, TAS.Cat (StepView a) b c)
-traverseStep ph tas rets = 
+    (TAS.Cat (StepView a) b c) -> 
+    a b (c, TAS.Cat (StepView a) b c)
+traverseStep ph tas = proc x ->
+    traverseArr (traverseOp ph) tas -< (x, Cat.id)
+
+
+traverseOp :: 
+    ArrowApply a =>
+    Phase ->
+    StepView a p q -> a p (q, StepView a p q)
+traverseOp ph sv = proc x ->
+  do
+    (_, y, pa) <- viewStep sv -< (ph, x)
+    returnA -< (y, StepView $ step pa)
+
+
+traverseArr ::
+    Arrow a'' =>
+    (forall p q. a p q -> a'' p (q, a' p q)) ->
+    (TAS.Cat a d c) -> 
+    a'' (d, TAS.Cat a' b d) (c, TAS.Cat a' b c)
+traverseArr f tas = 
     case
         Vw.unsnoc tas
       of
       Vw.Empty ->
-        proc x -> returnA -< (x, rets)
-      tas' Vw.:| stp -> 
-        proc x ->
+        Cat.id
+      tas' Vw.:| stp ->
+        proc (x, rets) ->
           do
-            (_, y, pa') <- viewStep stp -< (ph, x)
-            traverseStep ph tas' (StepView (step pa') <| rets) -<< y
+            (y, stp') <- f stp -< x
+            traverseArr f tas' -< (y, stp' <| rets)
 
 seqSweepStep ::
     ArrowApply a =>
@@ -155,33 +161,32 @@ seqSweepStep done cached =
               then 
                 proc _ ->
                   do
-                    (z, doneR) <- traverseStep Feed done Cat.id -< y
-                    let cachedR = mapCat (StepView . viewStepC) cached'
-                    returnA -< (Just z, cachedR >>> TAS.singleton (StepView stp') >>> doneR)
+                    let cachedR = StepView stp' Vw.<| mapCat (StepView . viewStepC) cached'
+                    (z, doneR) <- traverseArr (traverseOp Feed) done -< (y, cachedR)
+                    returnA -< (Just z, doneR)
               else
                 proc _ ->
                   do
-                    seqSweepStep (done Vw.|> (StepView (stp'))) cached' -< dm) -<< ()
+                    seqSweepStep (done Vw.|> (StepView stp')) cached' -< dm
+                ) -<< ()
                       
 
 
 makeCache ::
     ArrowApply a =>
     Phase ->
-    (TAS.Cat (StepView a) d c) -> 
-    (TAS.Cat (CachedSV a) b d) ->
-    a d (c, TAS.Cat (CachedSV a) b c)
-makeCache ph tas rets = 
-    case
-        Vw.unsnoc tas
-      of
-      Vw.Empty ->
-        proc x -> returnA -< (x, rets)
-      tas' Vw.:| stp -> 
-        proc x ->
-          do
-            (_, y, pa') <- viewStep stp -< (ph, x)
-            makeCache ph tas' (CachedSV (step pa') x <| rets) -<< y    
+    (TAS.Cat (StepView a) b c) -> 
+    a b (c, TAS.Cat (CachedSV a) b c)
+makeCache ph tas = proc x ->
+    traverseArr trans tas -< (x, Cat.id)
+  where
+    trans :: 
+        ArrowApply a =>
+        StepView a p q -> a p (q, CachedSV a p q)
+    trans sv = proc x ->
+      do
+        (_, y, pa) <- viewStep sv -< (ph, x)
+        returnA -< (y, CachedSV (step pa) x)
 
 
 toTas :: (ArrowApply a) => ProcessA a b c -> TAS.Cat (StepView a) b c
@@ -192,10 +197,20 @@ toTas (ProcessSeq tas) = tas
 
 
 -- |Fit(hoist) base arrow to another.
-fit :: (Arrow a, Arrow a') => 
-       (forall p q. a p q -> a' p q) -> 
-       ProcessA a b c -> ProcessA a' b c
-fit f (ProcessA af) = ProcessA $ f af >>> arr mod
+fit :: 
+    (Arrow a, Arrow a') => 
+    (forall p q. a p q -> a' p q) -> 
+    ProcessA a b c -> ProcessA a' b c
+fit f (ProcessA af) = 
+    ProcessA $ fitStep f af
+fit f (ProcessSeq tas) = 
+    ProcessSeq $ mapCat (StepView . fitStep f . viewStep) tas
+
+fitStep ::
+    (Arrow a, Arrow a') => 
+    (forall p q. a p q -> a' p q) -> 
+    StepType a b c -> StepType a' b c
+fitStep f af = f af >>> arr mod
   where
     mod (ph, y, next) = (ph, y, fit f next)
 
@@ -204,7 +219,6 @@ instance
     ArrowApply a => Profunctor (ProcessA a)
   where
     dimap f g pa = ProcessA $ dimapStep f g (step pa)
-    {-# INLINE dimap #-}
 
 dimapStep :: ArrowApply a => 
              (b->c)->(d->e)->
@@ -213,32 +227,25 @@ dimapStep f g stp = proc (ph, x) ->
   do
     (ph', y, pa') <- stp -< (ph, f x)
     returnA -< (ph', g y, dimap f g pa')
-{-# INLINE [1] dimapStep #-}
 
 
 instance
     ArrowApply a => Cat.Category (ProcessA a)
   where
     id = ProcessA (arrStep id)
-    {-# INLINE id #-}
     g . f = ProcessSeq $ toTas g <<< toTas f
-    {-# INLINE (.) #-}
-
 
 instance 
     ArrowApply a => Arrow (ProcessA a)
   where
     arr = ProcessA . arrStep
-    {-# INLINE arr #-}
 
     first pa = ProcessA $ proc (ph, (x, d)) ->
       do
         (ph', y, pa') <- step pa -< (ph, x)
         returnA -< (ph' `mappend` Suspend, (y, d), first pa')
-    {-# INLINE first #-}
 
     pa *** pb = ProcessA $ parStep (step pa) (step pb)
-    {-# INLINE (***) #-}
 
 
 parStep f g = proc (ph, (x1, x2)) ->
@@ -246,66 +253,11 @@ parStep f g = proc (ph, (x1, x2)) ->
     (ph1, y1, pa') <- f -< (ph, x1)
     (ph2, y2, pb') <- g -< (ph, x2)
     returnA -< (ph1 `mappend` ph2, (y1, y2), pa' *** pb')
-{-# INLINE [1] parStep #-}
+
 
 arrStep :: ArrowApply a => (b->c) -> StepType a b c
 arrStep f = proc (ph, x) ->
     returnA -< (ph `mappend` Suspend, f x, ProcessA $ arrStep f)
-{-# INLINE [1] arrStep #-}
-
-
--- |Composition is proceeded by the backtracking strategy.
-compositeStep :: ArrowApply a => 
-              StepType a b d -> StepType a d c -> StepType a b c
-compositeStep f g = proc (ph, x) -> compositeStep' ph f g -<< (ph, x)
-{- INLINE [1] compositeStep -}
-
-compositeStep' :: ArrowApply a => 
-              Phase -> 
-              StepType a b d -> StepType a d c -> StepType a b c
-             
-compositeStep' Sweep f g = proc (_, x) ->
-  do
-    (ph1, r1, pa') <- f -< (Suspend, x)
-    (ph2, r2, pb') <- g -<< (Sweep, r1)
-    cont ph2 x -<< (r2, pa', pb')
-  where
-    cont Feed x = arr $ \(r, pa, pb) -> (Feed, r, pa >>> pb)
-    cont Sweep x = arr $ \(r, pa, pb) -> (Sweep, r, pa >>> pb)
-    cont Suspend x = proc (_, pa, pb) ->
-      do
-        (ph1, r1, pa') <- step pa -<< (Sweep, x)
-        (ph2, r2, pb') <- step pb -<< (ph1, r1)
-        returnA -< (ph2, r2, pa' >>> pb')
-
-compositeStep' ph f g = proc (_, x) ->
-  do
-    (ph1, r1, pa') <- f -< (ph, x)
-    (ph2, r2, pb') <- g -<< (ph1, r1)
-    returnA -< (ph2, r2, pa' >>> pb')
-
--- rules
-{- RULES
-"ProcessA: concat/concat" 
-    forall f g h. compositeStep (compositeStep f g) h = compositeStep f (compositeStep g h)
-"ProcessA: arr/arr"
-    forall f g. compositeStep (arrStep f) (arrStep g) = arrStep (g . f)
-"ProcessA: arr/*"
-    forall f g. compositeStep (arrStep f) g = dimapStep f id g
-"ProcessA: */arr"
-    forall f g. compositeStep f (arrStep g) = dimapStep id g f
-"ProcessA: dimap/dimap"
-    forall f g h i j. dimapStep f j (dimapStep g i h)  = dimapStep (g . f) (j . i) h
-"ProcessA: dimap/arr"
-    forall f g h. dimapStep f h (arrStep g) = arrStep (h . g . f)
-"ProcessA: par/par"
-    forall f1 f2 g1 g2 h. compositeStep (parStep f1 f2) (compositeStep (parStep g1 g2) h) =
-        compositeStep (parStep (compositeStep f1 g1) (compositeStep f2 g2)) h
-"ProcessA: par/par-2"
-    forall f1 f2 g1 g2. compositeStep (parStep f1 f2) (parStep g1 g2) =
-        parStep (compositeStep f1 g1) (compositeStep f2 g2)
-  -}
-
 
 
 instance
@@ -330,7 +282,6 @@ instance
             (ph', (y, d'), pa') <- step pa -< (ph, (x, d))
             returnA -< ((ph', y, loop pa'), d')
 
-
 instance
     (ArrowApply a, ArrowReader r a) => 
     ArrowReader r (ProcessA a)
@@ -344,6 +295,7 @@ instance
       do
         (ph', y, pa') <- newReader (step pa) -< ((ph, e), r)
         returnA -< (ph', y, newReader pa')
+
 
 instance
     (ArrowApply a, ArrowApply a', ArrowAddReader r a a') =>
@@ -359,9 +311,3 @@ instance
       where
         pre (ph, (x, r)) = ((ph, x), r)
         post (ph, x, pra') = (ph, x, elimReader pra')
-{-
-    elimReader pra = ProcessA $ proc (ph, (x, r)) ->
-      do
-        (ph', y, pra') <- (| elimReader (step pra -< (ph, x)) |) r
-        returnA -< (ph', y, elimReader pra')
--}
