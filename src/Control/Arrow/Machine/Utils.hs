@@ -32,6 +32,10 @@ module
         rpSwitch,
         rpSwitchB,
 
+        -- * State arrow
+        peekState,
+        encloseState,
+
         -- * Other utility arrows
         tee,
         gather,
@@ -57,7 +61,8 @@ import qualified Control.Category as Cat
 import Control.Monad (liftM, forever)
 import Control.Monad.Trans
 import Control.Arrow
-import Control.Arrow.Transformer.Reader (ReaderArrow, runReader)
+import Control.Arrow.Operations (ArrowState(..))
+import Control.Arrow.Transformer.State (ArrowAddState(..))
 import Control.Applicative
 import Debug.Trace
 
@@ -202,6 +207,7 @@ feedback pa pb =
 --
 evMaybePh :: b -> (a->b) -> (Phase, Event a) -> b
 evMaybePh _ f (Feed, Event x) = f x
+evMaybePh _ f (Sweep, Event x) = f x
 evMaybePh d _ _ = d
 
 
@@ -393,6 +399,28 @@ rpSwitchB ::
 
 rpSwitchB = rpSwitch broadcast
 
+
+--
+-- State arrow
+--
+peekState ::
+    (ArrowApply a, ArrowState s a) =>
+    ProcessA a e s
+peekState = ProcessA $ proc (ph, dm) ->
+  do
+    s <- fetch -< dm
+    returnA -< (ph `mappend` Suspend, s, peekState)
+
+encloseState ::
+    (ArrowApply a, ArrowAddState s a a') =>
+    ProcessA a b c ->
+    s ->
+    ProcessA a' b c
+encloseState pa s = ProcessA $ proc (ph, x) ->
+  do
+    ((ph', y, pa'), s') <- elimState (step pa) -< ((ph, x), s)
+    returnA -< (ph', y, encloseState pa' s')
+
 --
 -- other utility arrow
 --
@@ -414,16 +442,30 @@ sample = join >>> Pl.construct (go id) >>> hold []
   where
     go l = 
       do
-        (evx, evy) <- Pl.await
+        (evx, evy) <- Pl.await `catch` return (NoEvent, End)
         let l2 = evMaybe l (\x -> l . (x:)) evx
+        if isEnd evy
+          then
+          do
+            Pl.yield $ l2 []
+            Pl.stop
+          else
+            return ()
         evMaybe (go l2) (\_ -> Pl.yield (l2 []) >> go id) evy
+
 
 gather ::
     (ArrowApply a, Fd.Foldable f) =>
     ProcessA a (f (Event b)) (Event b)
-gather = arr Event >>> 
-    Pl.repeatedly 
-        (Pl.await >>= Fd.mapM_ (evMaybe (return ()) Pl.yield))
+gather = arr go >>> fork
+  where
+    go :: Fd.Foldable f => f (Event b) -> Event [b]
+    go ls = Fd.foldr core ([]<$) ls end
+    core l r 
+      | isOccasion l = const $ (: fromEvent [] (r noEvent)) <$> l
+      | isNoEvent l = const $ r noEvent
+      | otherwise = r
+
 
 -- |It's also possible that source is defined without any await.
 -- 
@@ -493,10 +535,8 @@ onEnd = dSwitch (arr go) id
         | isEnd ev = (undefined, Event Pl.stopped)
         | otherwise = noEvent
 -}
-onEnd = ProcessA $ proc (ph, ev) ->
-  do
-    returnA -< go ph ev
+onEnd = join >>> go
   where
-    go ph ev 
-        | isEnd ev = (Feed, Event (), Pl.stopped)
-        | otherwise = (ph `mappend` Suspend, noEvent, onEnd)
+    go = Pl.repeatedly $
+        Pl.await `catch` (Pl.yield () >> Pl.stop)
+  

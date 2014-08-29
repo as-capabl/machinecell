@@ -1,3 +1,8 @@
+1.2.1
+------------
+* Support of `ArrowState`.
+* Correct EOS behaviour of some utilities.
+
 1.2.0
 ------------
 * Support of `ArrowReader`.

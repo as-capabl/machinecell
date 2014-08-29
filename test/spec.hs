@@ -8,6 +8,7 @@ module
     Main
 where
 
+import Prelude hiding (filter)
 import Data.Maybe (fromMaybe)
 import Control.Arrow.Machine as P
 import Control.Applicative ((<$>), (<*>), (<$))
@@ -374,18 +375,16 @@ utility =
       do
         it "samples events in terms of the 2nd input." $
           do
-            pendingWith "now many utilities behave incorrectly at the end of stream."
-{-
             let
                 pa = proc evx ->
                   do
                     evy <- fork -< (\x -> [x, x]) <$> evx
                     ys <- sample -< (evy, evx)
-                    ed <- onEnd -< evx
+                    ed <- onEnd -< evy
                     outEv <- gather -< [() <$ evx, ed]
                     returnA -< ys <$ outEv
-            Control.Monad.join (run pa [1..2]) `shouldBe` [1, 1, 2, 2]
--}
+            Control.Monad.join (run pa [1..3]) `shouldBe` [1, 1, 2, 2, 3, 3]
+
         it "correctly pushes simultaneous events into the same time." $
           do
             let 
@@ -394,6 +393,23 @@ utility =
                     l <- sample -< (evx, evx)
                     returnA -< l <$ evx
             run pa [1..3] `shouldBe` [[1], [2], [3]]
+
+    describe "gather" $
+      do
+        it "correctly handles the end" $
+          do
+            let
+                pa = proc x ->
+                  do
+                    r1 <- filter $ arr (\x -> x `mod` 3 == 0) -< x
+                    r2 <- stopped -< x::Event Int
+                    r3 <- returnA -< r2
+                    fin <- gather -< [r1, r2, r3]
+                    val <- hold 0 -< r1
+                    end <- onEnd -< fin
+                    returnA -< val <$ end
+            run pa [1, 2, 3, 4, 5] `shouldBe` ([3]::[Int])
+                    
 
 switches =
   do

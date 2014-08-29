@@ -28,6 +28,13 @@ import Graphics.UI.WX (Prop ((:=)))
 import qualified Graphics.UI.WXCore as WxC
 
 
+-- IORefのラップ
+type MyRef a = Wx.Var a
+newMyRef = Wx.varCreate
+myRefGet = Wx.varGet
+myRefSet = Wx.varSet
+
+
 -- イベントID
 newtype EventID = EventID Int deriving (Eq, Show)
 
@@ -43,8 +50,8 @@ type MainState a = P.ProcessA a
                     (P.Event (EventID, Any)) (P.Event ())
 
 data EventEnv a = EventEnv {
-      envGetIDPool :: Wx.Var EventID,
-      envGetState :: Wx.Var (MainState a),
+      envGetIDPool :: myRef EventID,
+      envGetState :: myRef (MainState a),
       envGetRun :: forall b c. a b c -> b -> IO c
     }
 
@@ -88,9 +95,9 @@ listen reg getter = proc (world@(World env etp), ia) ->
 
 handleProc env eid arg =
   do
-    stH <- Wx.varGet $ envGetState env
+    stH <- myRefGet $ envGetState env
     (_, stH') <- envGetRun env (P.stepRun stH) (eid, arg)
-    envGetState env `Wx.varSet` stH'
+    envGetState env `myRefSet` stH'
 
 
 -- |Fires once on initialization.
@@ -137,8 +144,8 @@ wxReactimate run init = Wx.start go
   where
     go =
       do
-        rec vID <- Wx.varCreate $ inclID initialID
-            vSt <- Wx.varCreate st
+        rec vID <- newMyRef $ inclID initialID
+            vSt <- newMyRef st
 
             let env = EventEnv { 
                       envGetIDPool = vID,

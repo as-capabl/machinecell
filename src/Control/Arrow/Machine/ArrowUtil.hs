@@ -26,9 +26,11 @@ module
 where
 
 import Control.Arrow
-import Control.Arrow.Operations (readState)
+import Control.Arrow.Operations (readState, store, fetch)
 import Control.Arrow.Transformer.Reader
+import Control.Arrow.Transformer.State
 import Control.Monad.Reader (ReaderT, runReaderT)
+import Control.Monad.State (StateT, runStateT)
 
 #if __GLASGOW_HASKELL__ >= 708
 
@@ -75,11 +77,25 @@ kleisli5 fmx = Kleisli $ \(x1, x2, x3, x4, x5) -> fmx x1 x2 x3 x4 x5
 reading :: 
     (Monad m, Arrow a) => 
     (forall p q. (p->m q)->a p q) -> 
-    (b -> ReaderT r m c) -> ReaderArrow r a b c
+    (b -> ReaderT r m c) ->
+    ReaderArrow r a b c
 reading f mr = proc x ->
   do
     r <- readState -< ()
     liftReader (f $ \(x, r) -> runReaderT (mr x) r) -< (x, r)
+
+statefully ::
+    (Monad m, Arrow a) =>
+    (forall p q. (p->m q)->a p q) -> 
+    (b -> StateT s m c) ->
+    StateArrow s a b c
+statefully f ms = proc x ->
+  do
+    s <- fetch -< ()
+    (y, s') <- liftState (f $ \(x, s) -> runStateT (ms x) s) -< (x, s)
+    store -< s'
+    returnA -< y
+    
 
 -- |Alternate for `elimReader` that can be used with both ghc 7.8 and older.
 elimR ::

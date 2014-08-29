@@ -14,7 +14,7 @@ import qualified Control.Category as Cat
 import Data.Monoid (Monoid(..))
 import Data.Profunctor (Profunctor, dimap)
 import Control.Arrow.Operations (ArrowReader(..))
-import Control.Arrow.Transformer.Reader (ReaderArrow, runReader, ArrowAddReader(..))
+import Control.Arrow.Transformer.Reader (runReader, ArrowAddReader(..))
 import Control.Arrow
 
 
@@ -217,9 +217,5 @@ instance
       where
         pre (ph, (x, r)) = ((ph, x), r)
         post (ph, x, pra') = (ph, x, elimReader pra')
-{-
-    elimReader pra = ProcessA $ proc (ph, (x, r)) ->
-      do
-        (ph', y, pra') <- (| elimReader (step pra -< (ph, x)) |) r
-        returnA -< (ph', y, elimReader pra')
--}
+
+
