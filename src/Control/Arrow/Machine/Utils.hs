@@ -47,7 +47,8 @@ module
         anytime,
         par,
         parB,
-        onEnd
+        onEnd,
+        probe
        )
 where
 
@@ -55,9 +56,11 @@ import Prelude hiding (filter)
 
 import Data.Monoid (mappend, mconcat)
 import Data.Tuple (swap)
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Foldable as Fd
 import qualified Data.Traversable as Tv
 import qualified Control.Category as Cat
+import Control.Monad.Reader (ask)
 import Control.Monad (liftM, forever)
 import Control.Monad.Trans
 import Control.Arrow
@@ -399,6 +402,8 @@ rpSwitchB ::
 
 rpSwitchB = rpSwitch broadcast
 
+-- `dpSwitch` and `drpSwitch` are not implemented.
+
 
 --
 -- State arrow
@@ -423,7 +428,16 @@ encloseState pa s = ProcessA $ proc (ph, x) ->
 
 --
 -- other utility arrow
---
+
+-- |Make two event streams into one.
+-- Actually `gather` is more general and convenient;
+-- @
+--   ... <- tee -< (e1, e2)
+-- @
+-- is equivalent to
+-- @
+--   ... <- gather -< [Left <$> e1, Right <$> e2]
+-- @
 tee ::
     ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
 tee = join >>> go
@@ -453,69 +467,57 @@ sample = join >>> Pl.construct (go id) >>> hold []
             return ()
         evMaybe (go l2) (\_ -> Pl.yield (l2 []) >> go id) evy
 
-
+-- |Make multiple event channels into one.
+-- If simultaneous events are given, lefter one is emitted earlier.
 gather ::
     (ArrowApply a, Fd.Foldable f) =>
     ProcessA a (f (Event b)) (Event b)
-gather = arr go >>> fork
+gather = arr (Fd.foldMap $ fmap singleton) >>> fork
   where
-    go :: Fd.Foldable f => f (Event b) -> Event [b]
-    go ls = Fd.foldr core ([]<$) ls end
-    core l r 
-      | isOccasion l = const $ (: fromEvent [] (r noEvent)) <$> l
-      | isNoEvent l = const $ r noEvent
-      | otherwise = r
+    singleton x = x NonEmpty.:| []
 
-
--- |It's also possible that source is defined without any await.
--- 
--- But awaits are useful to synchronize other inputs.
+-- | Provides a source event stream.
+-- A dummy input event stream is needed. 
+-- @
+--   run af [...]
+-- @
+-- is equivalent to
+-- @
+--   run (source [...] >>> af) (repeat ())
+-- @
 source ::
-    ArrowApply a =>
-    [c] -> ProcessA a (Event b) (Event c)
-source l = Pl.construct $ mapM_ yd l
+    (ArrowApply a, Fd.Foldable f) =>
+    f c -> ProcessA a (Event b) (Event c)
+source l = Pl.construct $ Fd.mapM_ yd l
   where
     yd x = Pl.await >> Pl.yield x
 
-fork :: 
+-- |Given an array-valued event and emit it's values as inidvidual events.
+fork ::
     (ArrowApply a, Fd.Foldable f) =>
     ProcessA a (Event (f b)) (Event b)
 
 fork = Pl.repeatedly $ 
     Pl.await >>= Fd.mapM_ Pl.yield
 
-
+-- |Executes an action once per an input event is provided.
 anytime :: 
     ArrowApply a =>
     a b c ->
     ProcessA a (Event b) (Event c)
 
-anytime action = Pl.repeatedlyT arrow $
+anytime action = Pl.repeatedlyT (ary0 unArrowMonad) $
   do
     x <- Pl.await
-    ret <- lift $ (ArrowMonad $ arr (const x) >>> action)
+    ret <- lift $ arrowMonad action x
     Pl.yield ret
-  where
-    arrow (ArrowMonad af) = af
 
-{-
-asNeeded action = ProcessA $ snd action >>> arr post
-  where
-    post (ph, y) = (ph `mconcat` Suspend, y, asNeeded action)
 
-asNeeded :: 
-    ArrowApply a =>
-    a b Bool ->
-    ProcessA a (Event b) (Event b)
--}
-
-filter cond = Pl.repeatedlyT arrow $
+filter cond = Pl.repeatedlyT (ary0 unArrowMonad) $
   do
     x <- Pl.await
-    b <- lift $ (ArrowMonad $ arr (const x) >>> cond)
+    b <- lift $ arrowMonad cond x
     if b then Pl.yield x else return ()
-  where
-    arrow (ArrowMonad af) = af
 
 
 echo :: 
@@ -528,15 +530,35 @@ echo = filter (arr (const True))
 onEnd ::
     (ArrowApply a, Occasional b) =>
     ProcessA a b (Event ())
-{-
-onEnd = dSwitch (arr go) id
-  where
-    go ev
-        | isEnd ev = (undefined, Event Pl.stopped)
-        | otherwise = noEvent
--}
 onEnd = join >>> go
   where
     go = Pl.repeatedly $
         Pl.await `catch` (Pl.yield () >> Pl.stop)
-  
+
+
+-- |Observe a value when an event of second argument is given,
+-- and emit the value as a slightly delayed event.
+-- This is useful to use with rec statement.
+probe ::
+    ArrowApply a =>
+    ProcessA a (b, Event c) (Event b)
+probe = proc (x, ev) ->
+  do
+    evmy <- (| elimR (go -< ev) |) x
+    fork -< evmy
+  where
+    go = Pl.repeatedlyT (ary0 $ reading unArrowMonad) $
+      do
+        Pl.await
+        x <- ask
+        Pl.yield Nothing
+        Pl.yield (Just x)
+    
+-- |
+cycleDelay ::
+    ArrowApply a => b -> ProcessA a b b
+cycleDelay cur = ProcessA $ arr go
+  where
+    go (Sweep, x) = (Suspend, cur, cycleDelay x)
+    go (ph, _) = (ph, cur, cycleDelay cur)
+    

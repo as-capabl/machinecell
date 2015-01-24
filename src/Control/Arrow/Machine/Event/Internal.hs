@@ -8,8 +8,9 @@ where
 import Control.Applicative
 import Data.Foldable
 import Data.Traversable
-import Data.Monoid (mappend, mconcat, mempty)
-
+import Data.Monoid (Monoid, mappend, mconcat, mempty)
+import Data.Semigroup (Semigroup, (<>))
+    
 data Event a = Event a | NoEvent | End deriving (Eq, Show)
 
 
@@ -47,6 +48,16 @@ instance
     traverse f NoEvent = pure NoEvent
     traverse f End = pure End
 
+instance
+    Semigroup a => Monoid (Event a)
+  where
+    mempty = End
+    Event x `mappend` Event y = Event (x <> y)
+    Event x `mappend` _ = Event x
+    _ `mappend` Event y = Event y
+    NoEvent `mappend` _ = NoEvent
+    _ `mappend` NoEvent = NoEvent
+    _ `mappend` _ = End
 
 {-
 instance

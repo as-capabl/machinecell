@@ -41,6 +41,7 @@ import Control.Arrow
 import Control.Monad.Trans
 import Debug.Trace
 
+import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Event.Internal (Event(..))
@@ -86,7 +87,9 @@ constructT fit pl = ProcessA $ fit' $ F.runFT pl pure free
     retArrow ph' evx cont = arr $ \(ph, _) -> 
         case ph of
           Suspend -> 
-              (ph `mappend` Suspend, if isEnd evx then End else NoEvent, ProcessA $ retArrow ph' evx cont)
+              (ph `mappend` Suspend,
+               if isEnd evx then End else NoEvent,
+               ProcessA $ retArrow ph' evx cont)
           _ -> 
               (ph `mappend` ph', evx, cont)
 
@@ -133,13 +136,7 @@ repeatedlyT f pl = constructT f $ forever pl
 construct :: ArrowApply a =>
              Plan i o t -> 
              ProcessA a (Event i) (Event o)
-construct pl = constructT kleisli pl
-  where
-    kleisli (ArrowMonad a) = a
-{-
-    unKleisli (Kleisli f) = proc x -> 
-        case f x of {ArrowMonad af -> af} -<< ()
--}    
+construct pl = constructT (ary0 unArrowMonad) pl
 
 repeatedly :: ArrowApply a =>
               Plan i o t -> 

@@ -23,6 +23,7 @@ import Control.Monad.Writer
 import Data.Monoid (Monoid (..), Endo(..), appEndo)
 import Data.Maybe (fromMaybe)
 
+import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Event.Internal (Event(..))
@@ -31,13 +32,6 @@ import Control.Arrow.Machine.Event.Internal (Event(..))
 --
 -- Utilities
 --
-aToM a i = 
-    ArrowMonad $ arr (const i) >>> a
-mToA fma = 
-    proc x -> case fma x of {ArrowMonad a -> a} -<< ()
-
-
-
 while_ ::
     Monad m =>
     m Bool -> m a -> m ()
@@ -180,9 +174,9 @@ runOn ::
     (c -> r) ->
     ProcessA a (Event b) (Event c) ->
     a [b] r
-runOn outpre pa0 = mToA $ \xs ->
+runOn outpre pa0 = unArrowMonad $ \xs ->
   do
-    wer <- runRM aToM pa0 $ execWriterT $ 
+    wer <- runRM arrowMonad pa0 $ execWriterT $ 
       do
         go xs
         lift (feed_ End End)
@@ -237,9 +231,9 @@ stepRun ::
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo [c], ProcessA a (Event b) (Event c))
 
-stepRun pa0 = mToA $ \x ->
+stepRun pa0 = unArrowMonad $ \x ->
   do
-    (pa, wer)  <- runRM aToM pa0 $ runWriterT $ 
+    (pa, wer)  <- runRM arrowMonad pa0 $ runWriterT $ 
       do
         sweepAll singleton
         lift $ feed x
@@ -262,7 +256,7 @@ stepYield ::
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo (Maybe c), ProcessA a (Event b) (Event c))
 
-stepYield pa0 = mToA $ \x -> runRM aToM pa0 $ evalStateT `flip` mempty $
+stepYield pa0 = unArrowMonad $ \x -> runRM arrowMonad pa0 $ evalStateT `flip` mempty $
   do
     go x
     r <- get
