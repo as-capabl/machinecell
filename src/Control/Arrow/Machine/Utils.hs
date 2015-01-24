@@ -534,19 +534,8 @@ onEnd = join >>> go
   where
     go = Pl.repeatedly $
         Pl.await `catch` (Pl.yield () >> Pl.stop)
-<<<<<<< HEAD
     
 -- |Observe a previous value of a signa.
--- Tipically used with rec statement.
-cycleDelay ::
-    ArrowApply a => b -> ProcessA a b b
-cycleDelay cur = ProcessA $ arr go
-  where
-    go (Sweep, x) = (Suspend, cur, cycleDelay x)
-    go (ph, _) = (ph, cur, cycleDelay cur)
-=======
-
--- |Refers a previous value of a signal.
 -- Tipically used with rec statement.
 cycleDelay ::
     ArrowApply a => ProcessA a b b
@@ -555,5 +544,5 @@ cycleDelay = ProcessA $ arr begin
     begin (ph, x) = (ph `mappend` Suspend, x, ProcessA $ arr (go x))
     go cur (Sweep, x) = (Suspend, cur, ProcessA $ arr (go x))
     go cur (ph, _) = (ph, cur, ProcessA $ arr (go cur))
->>>>>>> probe
+
     
