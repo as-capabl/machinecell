@@ -48,7 +48,7 @@ module
         par,
         parB,
         onEnd,
-        probe
+        cycleDelay
        )
 where
 
@@ -534,27 +534,9 @@ onEnd = join >>> go
   where
     go = Pl.repeatedly $
         Pl.await `catch` (Pl.yield () >> Pl.stop)
-
-
--- |Observe a value when an event of second argument is given,
--- and emit the value as a slightly delayed event.
--- This is useful to use with rec statement.
-probe ::
-    ArrowApply a =>
-    ProcessA a (b, Event c) (Event b)
-probe = proc (x, ev) ->
-  do
-    evmy <- (| elimR (go -< ev) |) x
-    fork -< evmy
-  where
-    go = Pl.repeatedlyT (ary0 $ reading unArrowMonad) $
-      do
-        Pl.await
-        x <- ask
-        Pl.yield Nothing
-        Pl.yield (Just x)
     
--- |
+-- |Observe a previous value of a signa.
+-- Tipically used with rec statement.
 cycleDelay ::
     ArrowApply a => b -> ProcessA a b b
 cycleDelay cur = ProcessA $ arr go
