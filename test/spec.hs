@@ -23,12 +23,23 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import RandomProc
-
+import LoopUtil
 runKI a x = runIdentity (runKleisli a x)
 
 
 
-main = hspec $ do {basics; rules; loops; choice; plans; utility; switches; operator; execution}
+main = hspec $ 
+  do 
+    basics
+    rules
+    loops
+    choice
+    plans
+    utility
+    switches
+    operator
+    execution
+    loopUtil
 
 
 basics =
