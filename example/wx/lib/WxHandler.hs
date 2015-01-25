@@ -7,9 +7,15 @@ module
     WxHandler 
       (
         World,
+        -- * Event
         on,
         on0,
         onInit,
+        
+        -- * Property
+        bind,
+        
+        -- * Running
         wxReactimate
       )
 where
@@ -50,8 +56,8 @@ type MainState a = P.ProcessA a
                     (P.Event (EventID, Any)) (P.Event ())
 
 data EventEnv a = EventEnv {
-      envGetIDPool :: myRef EventID,
-      envGetState :: myRef (MainState a),
+      envGetIDPool :: MyRef EventID,
+      envGetState :: MyRef (MainState a),
       envGetRun :: forall b c. a b c -> b -> IO c
     }
 
@@ -133,6 +139,18 @@ on0 signal = listen (arrIO2 regIO) (arr getter)
         Wx.set w [Wx.on signal := handler (unsafeCoerce ())]
     getter = const ()
 
+-- |Bind a behaviour to an attribute.
+bind ::
+    (ArrowIO a, Arrow a, ArrowApply a, Eq w, Eq b) =>
+    Wx.Attr w b ->
+    P.ProcessA a (w, b) ()
+bind attr = proc (w, x) ->
+  do
+    ev <- P.edge -< (w, x)
+    P.anytime
+        (arrIO (\(w, val) -> Wx.set w [attr := val]))
+            -< (w, x) <$ ev
+    returnA -< ()
 
 -- |Actuate an event handling process.
 wxReactimate :: 
