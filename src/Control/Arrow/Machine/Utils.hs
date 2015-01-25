@@ -126,7 +126,7 @@ edge = ProcessA $ impl Nothing
           else
             (ph `mappend` Suspend, NoEvent, ProcessA $ impl mvx)
 
-
+{-# DEPRECATED passRecent, withRecent "Use `hold` instead" #-}
 infixr 9 `passRecent`
 infixr 9 `feedback`
 
@@ -156,7 +156,7 @@ withRecent af = proc (e, asevx) ->
       _ -> returnA -< noEvent
 
 
-
+{-# DEPRECATED feedback1, feedback "Use Pump instead" #-}
 -- |Event version of loop (member of `ArrowLoop`).             
 -- Yielding an event to feedback output always creates a new process cycle.
 -- So be careful to make an infinite loop.
@@ -535,7 +535,7 @@ onEnd = join >>> go
     go = Pl.repeatedly $
         Pl.await `catch` (Pl.yield () >> Pl.stop)
     
--- |Observe a previous value of a signa.
+-- |Observe a previous value of a signal.
 -- Tipically used with rec statement.
 cycleDelay ::
     ArrowApply a => ProcessA a b b

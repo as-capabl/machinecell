@@ -9,6 +9,8 @@ module
       (
         -- * Run at once.
         run,
+        runOn,
+        run_,
         -- * Run step-by-step.
         ExecInfo(..),
         stepRun,
@@ -205,6 +207,14 @@ run ::
 run pa = 
     runOn (\x -> Endo (x:)) pa >>>
     arr (appEndo `flip` [])
+
+-- | Run a machine discarding all results.
+run_ :: 
+    ArrowApply a => 
+    ProcessA a (Event b) (Event c) -> 
+    a [b] ()
+run_ pa = 
+    runOn (const ()) pa
 
 
 -- | Represents return values and informations of step executions.

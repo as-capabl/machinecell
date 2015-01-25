@@ -1,6 +1,7 @@
-1.2.1
+1.3.0
 ------------
 * Support of `ArrowState`.
+* Added utilities related to `ArrowLoop` (cycleDelay, Pump)
 * Correct EOS behaviour of some utilities.
 
 1.2.0

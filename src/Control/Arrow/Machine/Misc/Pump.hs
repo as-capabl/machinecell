@@ -7,6 +7,17 @@
 module
     Control.Arrow.Machine.Misc.Pump
       (
+        -- *Pump
+        -- | This module should be imported manually.
+        --
+        -- `intake` records events and `outlet` emits recorded events.
+        --
+        -- Tipically they are used with rec statement.
+        --
+        -- `clock` arguments are needed to drive a `Pump`.
+        -- For a pair of `intake` and `outlet`, `clock` arguments must point the
+        -- same event stream.
+        Duct(),
         intake,
         outlet
       )
