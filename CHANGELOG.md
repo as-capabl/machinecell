@@ -1,3 +1,8 @@
+
+1.3.1
+------------
+* (Fix test suite of 1.3.0)
+
 1.3.0
 ------------
 * Support of `ArrowState`.
@@ -21,7 +26,7 @@
 * Added `feedback`
 * Fixed `accum`
 
-1.0,1
+1.0.1
 ------------
 * Fix some bugs of core part.
 * Added `onEnd`.
