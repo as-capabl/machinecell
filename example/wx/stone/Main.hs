@@ -1,9 +1,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module
@@ -27,6 +26,12 @@ import qualified Graphics.UI.WXCore as WxC
 
 import qualified WxHandler as WxP
 
+
+--
+-- 定義
+--
+
+-- Mainアロー
 type MainArrow = Kleisli IO
 runMainArrow = runKleisli
 instance ArrowIO MainArrow
@@ -34,6 +39,7 @@ instance ArrowIO MainArrow
     arrIO = Kleisli
 
 
+-- フォーム
 data MyForm a = MyForm { 
       myFormF :: Wx.Frame a,
       myFormLabel :: Wx.StaticText a,
@@ -41,6 +47,8 @@ data MyForm a = MyForm {
       myFormBtns :: [(Int, Wx.Button a)]
 }
 
+
+-- コマンド
 data Command = NewGame | Message String | Stone Int
 makePrisms ''Command
 
@@ -48,6 +56,11 @@ forkOf ::
     ArrowApply a =>
     Fold s b -> P.ProcessA a (P.Event s) (P.Event b)
 forkOf fd = P.repeatedly $ P.await >>= mapMOf_ fd P.yield
+
+
+--
+-- 処理
+--
 
 -- ボタンリストのイベント待機
 onBtnAll :: (ArrowApply a, ArrowIO a) =>
@@ -89,15 +102,15 @@ machine = proc world ->
         return $ MyForm f lbl cntr btns
 
     -- メインの処理
-    go fm@(MyForm f lbl cntr btns) = proc world ->
+    go MyForm{..} = proc world ->
       do
         rec
             -- ボタンから入力
-            took <- onBtnAll btns -< world
+            took <- onBtnAll myFormBtns -< world
     
             -- ゲームコルーチンを走らせる
             numStones' <- P.cycleDelay -< numStones
-            command <- game f -< (,) numStones' <$> took
+            command <- game myFormF -< (,) numStones' <$> took
     
             -- ゲーム開始をハンドル
             newGameMsg <- forkOf _NewGame -< command
@@ -108,11 +121,11 @@ machine = proc world ->
             numStones <- P.hold (-1) <<< P.gather -< [newStones, newGameStones]
 
         -- 数ラベル
-        WxP.bind Wx.text -< (cntr, show numStones)
+        WxP.bind Wx.text -< (myFormCounter, show numStones)
 
         -- メッセージ
         message <- P.hold "" <<< forkOf _Message -< command
-        WxP.bind Wx.text -< (lbl, message)
+        WxP.bind Wx.text -< (myFormLabel, message)
         
         returnA -< P.noEvent
 
