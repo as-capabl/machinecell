@@ -47,6 +47,7 @@ module
         anytime,
         par,
         parB,
+        now,
         onEnd,
         cycleDelay
        )
@@ -526,11 +527,18 @@ echo ::
 
 echo = filter (arr (const True))
 
+now ::
+    ArrowApply a =>
+    ProcessA a b (Event ())
+now = arr (const noEvent) >>> go
+  where
+    go = Pl.construct $
+        Pl.yield () >> forever Pl.await
 
 onEnd ::
     (ArrowApply a, Occasional b) =>
     ProcessA a b (Event ())
-onEnd = join >>> go
+onEnd = arr collapse >>> go
   where
     go = Pl.repeatedly $
         Pl.await `catch` (Pl.yield () >> Pl.stop)

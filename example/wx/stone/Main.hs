@@ -10,6 +10,7 @@ module
 where
 
 import qualified Control.Arrow.Machine as P
+import qualified Control.Arrow.Machine.Misc.Discrete as D
 import Control.Applicative ((<$>), (<*>), (<$))
 import qualified Control.Category as Cat
 import Control.Arrow
@@ -109,7 +110,7 @@ machine = proc world ->
             took <- onBtnAll myFormBtns -< world
     
             -- ゲームコルーチンを走らせる
-            numStones' <- P.cycleDelay -< numStones
+            numStones' <- P.cycleDelay -< D.value numStones
             command <- game myFormF -< (,) numStones' <$> took
     
             -- ゲーム開始をハンドル
@@ -118,13 +119,14 @@ machine = proc world ->
             
             -- 新しい石の数を適用
             newStones <- forkOf _Stone -< command
-            numStones <- P.hold (-1) <<< P.gather -< [newStones, newGameStones]
+            numStones <- D.hold (-1) <<< P.gather -< [newStones, newGameStones]
 
         -- 数ラベル
-        WxP.bind Wx.text -< (myFormCounter, show numStones)
+        counterText <- D.arr show -< numStones
+        WxP.bind Wx.text -< (myFormCounter, counterText)
 
         -- メッセージ
-        message <- P.hold "" <<< forkOf _Message -< command
+        message <- D.hold "" <<< forkOf _Message -< command
         WxP.bind Wx.text -< (myFormLabel, message)
         
         returnA -< P.noEvent

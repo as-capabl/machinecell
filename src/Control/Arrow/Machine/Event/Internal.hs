@@ -3,6 +3,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE GADTs #-}
 
 module
@@ -99,36 +100,33 @@ instance
 class 
     Occasional a
   where
+    collapse :: a -> Event ()
     noEvent :: a
     end :: a
+
     isNoEvent :: a -> Bool
+    isNoEvent = collapse >>> \case { NoEvent -> True; _ -> False }
+
     isEnd :: a -> Bool
+    isEnd = collapse >>> \case { End -> True; _ -> False }
+
     isOccasion :: a -> Bool
-    isOccasion x = not (isNoEvent x) && not (isEnd x)
+    isOccasion = collapse >>> \case { Event () -> True; _ -> False }
 
 instance
     (Occasional a, Occasional b) => Occasional (a, b)
   where
+    collapse (x, y) = collapse x `mappend` collapse y
     noEvent = (noEvent, noEvent)
     end = (end, end)
-    isOccasion xy@(x, y) = 
-        (isOccasion x || isOccasion y) && not (isEnd xy)
-    isNoEvent xy = 
-        not (isOccasion xy) && not (isEnd xy)
-    isEnd (x, y) = isEnd x && isEnd y
-
-
 
 
 instance 
     Occasional (Event a)
   where
+    collapse = (() <$)
     noEvent = NoEvent
     end = End
-    isNoEvent NoEvent = True
-    isNoEvent _ = False
-    isEnd End = True
-    isEnd _ = False
 
 hEv :: ArrowApply a => a (e,b) c -> a e c -> a (e, Event b) c
 hEv f1 f2 = proc (e, ev) ->
@@ -188,12 +186,7 @@ split = arr go
 
 
 join :: (Arrow a, Occasional b) => a b (Event b)
-join = arr go
-  where
-    go x 
-       | isEnd x = End
-       | isNoEvent x = NoEvent
-       | otherwise = Event x
+join = arr $ \x -> x <$ collapse x
 
 
 split2 :: Event (Event a, Event b) -> (Event a, Event b)

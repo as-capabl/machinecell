@@ -21,6 +21,7 @@ module
 where
 
 import qualified Control.Arrow.Machine as P
+import qualified Control.Arrow.Machine.Misc.Discrete as D
 import Data.Functor ((<$>), (<$))
 import qualified Control.Category as Cat
 import Control.Arrow
@@ -141,15 +142,16 @@ on0 signal = listen (arrIO2 regIO) (arr getter)
 
 -- |Bind a behaviour to an attribute.
 bind ::
-    (ArrowIO a, Arrow a, ArrowApply a, Eq w, Eq b) =>
+    (ArrowIO a, Arrow a, ArrowApply a, Eq w) =>
     Wx.Attr w b ->
-    P.ProcessA a (w, b) ()
+    P.ProcessA a (w, D.T b) ()
 bind attr = proc (w, x) ->
   do
-    ev <- P.edge -< (w, x)
+    wd <- D.fromEq -< w
+    ev <- D.edge <<< D.arr2 (,) -< (wd, x)
     P.anytime
         (arrIO (\(w, val) -> Wx.set w [attr := val]))
-            -< (w, x) <$ ev
+            -< ev
     returnA -< ()
 
 -- |Actuate an event handling process.
