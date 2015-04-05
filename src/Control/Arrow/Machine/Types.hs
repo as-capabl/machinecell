@@ -19,7 +19,7 @@ import qualified Control.Category.Free.View as Vw
 import Control.Category.Free.Catenated (foldCat)
 import Data.Profunctor (Profunctor, dimap)
 import Control.Arrow.Operations (ArrowReader(..))
-import Control.Arrow.Transformer.Reader (ReaderArrow, runReader, ArrowAddReader(..))
+import Control.Arrow.Transformer.Reader (runReader, ArrowAddReader(..))
 import Control.Arrow
 
 

@@ -1,3 +1,14 @@
+
+1.3.1
+------------
+* (Fix test suite of 1.3.0)
+
+1.3.0
+------------
+* Support of `ArrowState`.
+* Added utilities related to `ArrowLoop` (cycleDelay, Pump)
+* Correct EOS behaviour of some utilities.
+
 1.2.0
 ------------
 * Support of `ArrowReader`.
@@ -15,7 +26,7 @@
 * Added `feedback`
 * Fixed `accum`
 
-1.0,1
+1.0.1
 ------------
 * Fix some bugs of core part.
 * Added `onEnd`.

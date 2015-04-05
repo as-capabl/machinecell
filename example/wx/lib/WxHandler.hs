@@ -7,9 +7,15 @@ module
     WxHandler 
       (
         World,
+        -- * Event
         on,
         on0,
         onInit,
+        
+        -- * Property
+        bind,
+        
+        -- * Running
         wxReactimate
       )
 where
@@ -28,6 +34,13 @@ import Graphics.UI.WX (Prop ((:=)))
 import qualified Graphics.UI.WXCore as WxC
 
 
+-- IORefのラップ
+type MyRef a = Wx.Var a
+newMyRef = Wx.varCreate
+myRefGet = Wx.varGet
+myRefSet = Wx.varSet
+
+
 -- イベントID
 newtype EventID = EventID Int deriving (Eq, Show)
 
@@ -43,8 +56,8 @@ type MainState a = P.ProcessA a
                     (P.Event (EventID, Any)) (P.Event ())
 
 data EventEnv a = EventEnv {
-      envGetIDPool :: Wx.Var EventID,
-      envGetState :: Wx.Var (MainState a),
+      envGetIDPool :: MyRef EventID,
+      envGetState :: MyRef (MainState a),
       envGetRun :: forall b c. a b c -> b -> IO c
     }
 
@@ -88,9 +101,9 @@ listen reg getter = proc (world@(World env etp), ia) ->
 
 handleProc env eid arg =
   do
-    stH <- Wx.varGet $ envGetState env
+    stH <- myRefGet $ envGetState env
     (_, stH') <- envGetRun env (P.stepRun stH) (eid, arg)
-    envGetState env `Wx.varSet` stH'
+    envGetState env `myRefSet` stH'
 
 
 -- |Fires once on initialization.
@@ -126,6 +139,18 @@ on0 signal = listen (arrIO2 regIO) (arr getter)
         Wx.set w [Wx.on signal := handler (unsafeCoerce ())]
     getter = const ()
 
+-- |Bind a behaviour to an attribute.
+bind ::
+    (ArrowIO a, Arrow a, ArrowApply a, Eq w, Eq b) =>
+    Wx.Attr w b ->
+    P.ProcessA a (w, b) ()
+bind attr = proc (w, x) ->
+  do
+    ev <- P.edge -< (w, x)
+    P.anytime
+        (arrIO (\(w, val) -> Wx.set w [attr := val]))
+            -< (w, x) <$ ev
+    returnA -< ()
 
 -- |Actuate an event handling process.
 wxReactimate :: 
@@ -137,8 +162,8 @@ wxReactimate run init = Wx.start go
   where
     go =
       do
-        rec vID <- Wx.varCreate $ inclID initialID
-            vSt <- Wx.varCreate st
+        rec vID <- newMyRef $ inclID initialID
+            vSt <- newMyRef st
 
             let env = EventEnv { 
                       envGetIDPool = vID,

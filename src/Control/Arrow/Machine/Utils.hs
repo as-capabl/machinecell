@@ -32,6 +32,10 @@ module
         rpSwitch,
         rpSwitchB,
 
+        -- * State arrow
+        peekState,
+        encloseState,
+
         -- * Other utility arrows
         tee,
         gather,
@@ -43,7 +47,8 @@ module
         anytime,
         par,
         parB,
-        onEnd
+        onEnd,
+        cycleDelay
        )
 where
 
@@ -51,13 +56,16 @@ import Prelude hiding (filter)
 
 import Data.Monoid (mappend, mconcat)
 import Data.Tuple (swap)
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Foldable as Fd
 import qualified Data.Traversable as Tv
 import qualified Control.Category as Cat
+import Control.Monad.Reader (ask)
 import Control.Monad (liftM, forever)
 import Control.Monad.Trans
 import Control.Arrow
-import Control.Arrow.Transformer.Reader (ReaderArrow, runReader)
+import Control.Arrow.Operations (ArrowState(..))
+import Control.Arrow.Transformer.State (ArrowAddState(..))
 import Control.Applicative
 import Debug.Trace
 
@@ -118,7 +126,7 @@ edge = ProcessA $ impl Nothing
           else
             (ph `mappend` Suspend, NoEvent, ProcessA $ impl mvx)
 
-
+{-# DEPRECATED passRecent, withRecent "Use `hold` instead" #-}
 infixr 9 `passRecent`
 infixr 9 `feedback`
 
@@ -148,7 +156,7 @@ withRecent af = proc (e, asevx) ->
       _ -> returnA -< noEvent
 
 
-
+{-# DEPRECATED feedback1, feedback "Use Pump instead" #-}
 -- |Event version of loop (member of `ArrowLoop`).             
 -- Yielding an event to feedback output always creates a new process cycle.
 -- So be careful to make an infinite loop.
@@ -202,6 +210,7 @@ feedback pa pb =
 --
 evMaybePh :: b -> (a->b) -> (Phase, Event a) -> b
 evMaybePh _ f (Feed, Event x) = f x
+evMaybePh _ f (Sweep, Event x) = f x
 evMaybePh d _ _ = d
 
 
@@ -393,9 +402,42 @@ rpSwitchB ::
 
 rpSwitchB = rpSwitch broadcast
 
+-- `dpSwitch` and `drpSwitch` are not implemented.
+
+
+--
+-- State arrow
+--
+peekState ::
+    (ArrowApply a, ArrowState s a) =>
+    ProcessA a e s
+peekState = ProcessA $ proc (ph, dm) ->
+  do
+    s <- fetch -< dm
+    returnA -< (ph `mappend` Suspend, s, peekState)
+
+encloseState ::
+    (ArrowApply a, ArrowAddState s a a') =>
+    ProcessA a b c ->
+    s ->
+    ProcessA a' b c
+encloseState pa s = ProcessA $ proc (ph, x) ->
+  do
+    ((ph', y, pa'), s') <- elimState (step pa) -< ((ph, x), s)
+    returnA -< (ph', y, encloseState pa' s')
+
 --
 -- other utility arrow
---
+
+-- |Make two event streams into one.
+-- Actually `gather` is more general and convenient;
+-- @
+--   ... <- tee -< (e1, e2)
+-- @
+-- is equivalent to
+-- @
+--   ... <- gather -< [Left <$> e1, Right <$> e2]
+-- @
 tee ::
     ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
 tee = join >>> go
@@ -414,66 +456,68 @@ sample = join >>> Pl.construct (go id) >>> hold []
   where
     go l = 
       do
-        (evx, evy) <- Pl.await
+        (evx, evy) <- Pl.await `catch` return (NoEvent, End)
         let l2 = evMaybe l (\x -> l . (x:)) evx
+        if isEnd evy
+          then
+          do
+            Pl.yield $ l2 []
+            Pl.stop
+          else
+            return ()
         evMaybe (go l2) (\_ -> Pl.yield (l2 []) >> go id) evy
 
+-- |Make multiple event channels into one.
+-- If simultaneous events are given, lefter one is emitted earlier.
 gather ::
     (ArrowApply a, Fd.Foldable f) =>
     ProcessA a (f (Event b)) (Event b)
-gather = arr Event >>> 
-    Pl.repeatedly 
-        (Pl.await >>= Fd.mapM_ (evMaybe (return ()) Pl.yield))
+gather = arr (Fd.foldMap $ fmap singleton) >>> fork
+  where
+    singleton x = x NonEmpty.:| []
 
--- |It's also possible that source is defined without any await.
--- 
--- But awaits are useful to synchronize other inputs.
+-- | Provides a source event stream.
+-- A dummy input event stream is needed. 
+-- @
+--   run af [...]
+-- @
+-- is equivalent to
+-- @
+--   run (source [...] >>> af) (repeat ())
+-- @
 source ::
-    ArrowApply a =>
-    [c] -> ProcessA a (Event b) (Event c)
-source l = Pl.construct $ mapM_ yd l
+    (ArrowApply a, Fd.Foldable f) =>
+    f c -> ProcessA a (Event b) (Event c)
+source l = Pl.construct $ Fd.mapM_ yd l
   where
     yd x = Pl.await >> Pl.yield x
 
-fork :: 
+-- |Given an array-valued event and emit it's values as inidvidual events.
+fork ::
     (ArrowApply a, Fd.Foldable f) =>
     ProcessA a (Event (f b)) (Event b)
 
 fork = Pl.repeatedly $ 
     Pl.await >>= Fd.mapM_ Pl.yield
 
-
+-- |Executes an action once per an input event is provided.
 anytime :: 
     ArrowApply a =>
     a b c ->
     ProcessA a (Event b) (Event c)
 
-anytime action = Pl.repeatedlyT arrow $
+anytime action = Pl.repeatedlyT (ary0 unArrowMonad) $
   do
     x <- Pl.await
-    ret <- lift $ (ArrowMonad $ arr (const x) >>> action)
+    ret <- lift $ arrowMonad action x
     Pl.yield ret
-  where
-    arrow (ArrowMonad af) = af
 
-{-
-asNeeded action = ProcessA $ snd action >>> arr post
-  where
-    post (ph, y) = (ph `mconcat` Suspend, y, asNeeded action)
 
-asNeeded :: 
-    ArrowApply a =>
-    a b Bool ->
-    ProcessA a (Event b) (Event b)
--}
-
-filter cond = Pl.repeatedlyT arrow $
+filter cond = Pl.repeatedlyT (ary0 unArrowMonad) $
   do
     x <- Pl.await
-    b <- lift $ (ArrowMonad $ arr (const x) >>> cond)
+    b <- lift $ arrowMonad cond x
     if b then Pl.yield x else return ()
-  where
-    arrow (ArrowMonad af) = af
 
 
 echo :: 
@@ -486,17 +530,19 @@ echo = filter (arr (const True))
 onEnd ::
     (ArrowApply a, Occasional b) =>
     ProcessA a b (Event ())
-{-
-onEnd = dSwitch (arr go) id
+onEnd = join >>> go
   where
-    go ev
-        | isEnd ev = (undefined, Event Pl.stopped)
-        | otherwise = noEvent
--}
-onEnd = ProcessA $ proc (ph, ev) ->
-  do
-    returnA -< go ph ev
+    go = Pl.repeatedly $
+        Pl.await `catch` (Pl.yield () >> Pl.stop)
+    
+-- |Observe a previous value of a signal.
+-- Tipically used with rec statement.
+cycleDelay ::
+    ArrowApply a => ProcessA a b b
+cycleDelay = ProcessA $ arr begin
   where
-    go ph ev 
-        | isEnd ev = (Feed, Event (), Pl.stopped)
-        | otherwise = (ph `mappend` Suspend, noEvent, onEnd)
+    begin (ph, x) = (ph `mappend` Suspend, x, ProcessA $ arr (go x))
+    go cur (Sweep, x) = (Suspend, cur, ProcessA $ arr (go x))
+    go cur (ph, _) = (ph, cur, ProcessA $ arr (go cur))
+
+    

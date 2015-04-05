@@ -1,8 +1,9 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module
     Main
@@ -15,6 +16,7 @@ import Control.Arrow
 import Control.Arrow.ArrowIO
 import Control.Monad
 import Control.Monad.Trans
+import Control.Lens
 import System.Random
 import Debug.Trace
 
@@ -24,6 +26,12 @@ import qualified Graphics.UI.WXCore as WxC
 
 import qualified WxHandler as WxP
 
+
+--
+-- 定義
+--
+
+-- Mainアロー
 type MainArrow = Kleisli IO
 runMainArrow = runKleisli
 instance ArrowIO MainArrow
@@ -31,6 +39,7 @@ instance ArrowIO MainArrow
     arrIO = Kleisli
 
 
+-- フォーム
 data MyForm a = MyForm { 
       myFormF :: Wx.Frame a,
       myFormLabel :: Wx.StaticText a,
@@ -38,6 +47,20 @@ data MyForm a = MyForm {
       myFormBtns :: [(Int, Wx.Button a)]
 }
 
+
+-- コマンド
+data Command = NewGame | Message String | Stone Int
+makePrisms ''Command
+
+forkOf ::
+    ArrowApply a =>
+    Fold s b -> P.ProcessA a (P.Event s) (P.Event b)
+forkOf fd = P.repeatedly $ P.await >>= mapMOf_ fd P.yield
+
+
+--
+-- 処理
+--
 
 -- ボタンリストのイベント待機
 onBtnAll :: (ArrowApply a, ArrowIO a) =>
@@ -58,10 +81,7 @@ machine = proc world ->
     form <- P.anytime (arrIO0 setup) -< initMsg
 
     -- formが作成されたらgoにスイッチ
-    P.switch 
-            (arr $ \(_, f) -> (P.noEvent, f))
-            go
-        -< (world, form)
+    P.rSwitch (arr $ const P.noEvent) -< (world, go <$> form)
 
   where
     -- GUI初期化
@@ -82,39 +102,39 @@ machine = proc world ->
         return $ MyForm f lbl cntr btns
 
     -- メインの処理
-    go fm@(MyForm f lbl cntr btns) = proc (world, _) ->
-        (\newNum -> P.hold (-1) -< newNum)
-      `P.feedback` \numStones -> 
+    go MyForm{..} = proc world ->
       do
-        -- カウンタの更新
-        newNumStones <- P.edge -< numStones
-        P.anytime  
-            (arrIO (\txt -> Wx.set cntr [Wx.text := show txt]))
-                -< newNumStones
+        rec
+            -- ボタンから入力
+            took <- onBtnAll myFormBtns -< world
+    
+            -- ゲームコルーチンを走らせる
+            numStones' <- P.cycleDelay -< numStones
+            command <- game myFormF -< (,) numStones' <$> took
+    
+            -- ゲーム開始をハンドル
+            newGameMsg <- forkOf _NewGame -< command
+            newGameStones <- P.anytime (arrIO0 $ randomRIO (7, 30)) -< newGameMsg
+            
+            -- 新しい石の数を適用
+            newStones <- forkOf _Stone -< command
+            numStones <- P.hold (-1) <<< P.gather -< [newStones, newGameStones]
 
-        -- ボタンから入力
-        took <- onBtnAll btns -< world
+        -- 数ラベル
+        WxP.bind Wx.text -< (myFormCounter, show numStones)
 
-        -- ゲームコルーチンを走らせる
-        gameR <- game f -< (,) numStones <$> took
-
-        -- メッセージの更新
-        P.anytime  
-            (arrIO (\txt -> Wx.set lbl [Wx.text := txt]))
-                 -< snd <$> gameR
-
-        -- ゲーム開始をハンドル(初期化時または決着時)
-        newGameMsg <- P.filter (arr (<= 0)) <<< P.edge -< numStones
-        initGame <- P.anytime (arrIO0 $ randomRIO (7, 30)) -< newGameMsg
+        -- メッセージ
+        message <- P.hold "" <<< forkOf _Message -< command
+        WxP.bind Wx.text -< (myFormLabel, message)
         
-        -- 新しい石の数をフィードバック
-        gameRNum <- P.fork -< fst <$> gameR -- Maybeを消す
-        newNum <- P.gather -< [gameRNum, initGame]
-        returnA -< (P.noEvent, newNum) -- 第二引数をフィードバック
+        returnA -< P.noEvent
 
 
 game f = P.constructT arrIO0 $
   do
+    P.yield NewGame
+    P.yield $ Message "A player who takes the last stone will lose."
+
     forever $
       do
         -- ボタン入力を待つ
@@ -124,27 +144,28 @@ game f = P.constructT arrIO0 $
             n' = n - youTook -- プレイヤーが取った後の石
             cpuTook' = (n' - 1) `mod` 4
             cpuTook = if cpuTook' == 0 then 1 else cpuTook' -- CPUが取る石
-            nFin = if n' <= 0 then n' else n' - cpuTook
-            msg = "You took " ++ show youTook ++ 
+        P.yield $ Stone $ if n' <= 0 then n' else n' - cpuTook
+        P.yield $ Message $
+            "You took " ++ show youTook ++ 
                 if n' > 0 then ", CPU took " ++ show cpuTook ++ "."
                           else "."
 
-        -- ここでyield(ラベルを更新してからダイアログを出すため)
-        P.yield $ (Just nFin, msg)
-
         -- ダイアログの表示(別にコルーチンの中でする必要はないが、デモとして)
-        if n' <= 0 then
-          do
-            lift $ Wx.infoDialog f "Game over" "You lose."
-            P.yield (Nothing, "New game.")
+        if
+            | n' <= 0 ->
+              do
+                lift $ Wx.infoDialog f "Game over" "You lose."
+                P.yield NewGame
+                P.yield $ Message $ "New game."
 
-          else if n' - cpuTook <= 0 then
-          do
-            lift $ Wx.infoDialog f "Game over" "You win."
-            P.yield (Nothing, "New game.")
+            | n' - cpuTook <= 0 ->
+              do
+                lift $ Wx.infoDialog f "Game over" "You win."
+                P.yield NewGame
+                P.yield $ Message $ "New game."
 
-          else
-            return ()
+            | otherwise ->
+                return ()
             
 
 

@@ -1,12 +1,16 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE MultiWayIf #-}
 
 module
     Control.Arrow.Machine.Running
       (
         -- * Run at once.
         run,
+        runOn,
+        run_,
         -- * Run step-by-step.
         ExecInfo(..),
         stepRun,
@@ -16,54 +20,201 @@ where
 
 import Control.Arrow
 import Control.Applicative (Alternative (..))
-import Data.Monoid (Monoid (..))
+import Control.Monad.State
+import Control.Monad.Writer
+import Data.Monoid (Monoid (..), Endo(..), appEndo)
+import Data.Maybe (fromMaybe)
 
+import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Event.Internal (Event(..))
 
 
-adv Feed = Sweep
-adv Suspend = Feed
-
-
-handle f1 f2 f3 = proc (e, (ph, ev)) ->
-    handleImpl ph ev -<< e
-  where
-    handleImpl Feed (Event x) = proc e -> f1 -< (e, x)
-    handleImpl Suspend _ = f3
-    handleImpl _ End = f3
-    handleImpl _ _ = f2
-
-
-run :: ArrowApply a => ProcessA a (Event b) (Event c) -> a [b] [c]
-run pa = proc xs -> 
+--
+-- Utilities
+--
+while_ ::
+    Monad m =>
+    m Bool -> m a -> m ()
+while_ cond body =
   do
-    ys <- go Sweep pa xs id -<< ()
-    returnA -< ys []
+    b <- cond
+    if b
+        then body >> while_ cond body
+        else return ()
+
+-- | Monoid wrapper
+data WithEnd r = WithEnd { 
+    getRWE :: r,
+    getContWE :: Bool
+  }
+
+instance
+    Monoid r => Monoid (WithEnd r)
   where
-    go Sweep pa [] ys = proc _ ->
-      do
-        (ph', y, pa') <- step pa -< (Sweep, End)
-        react y ph' pa' [] ys -<< ()
+    mempty = WithEnd mempty True
+    WithEnd x True `mappend` WithEnd y b = WithEnd (x `mappend` y) b
+    mx@(WithEnd x False) `mappend` _ = mx
 
-    go Feed pa [] ys = arr $ const ys
 
-    go ph pa (x:xs) ys = proc _ ->
-      do
-        let (evx, xs') = if ph == Feed then (Event x, xs) else (NoEvent, x:xs)
-        (ph', y, pa') <- step pa -< (ph, evx)
-        react y ph' pa' xs' ys -<< ()
+--
+-- Running Monad (To be exported)
+--
+data RunInfo a i o m = RunInfo {
+    freezeRI :: ProcessA a i o,
+    getInputRI :: i,
+    getPaddingRI :: i,
+    getPhaseRI :: Phase,
+    getFitRI :: forall p q. a p q -> p -> m q
+}
+
+type RM a i o m = StateT (RunInfo a i o m) m
+
+runRM ::
+    (Monad m, ArrowApply a) =>
+    (forall p q. a p q -> p -> m q) ->
+    ProcessA a (Event i) o ->
+    RM a (Event i) o m x ->
+    m x
+runRM f pa mx = 
+    evalStateT mx $ 
+        RunInfo {
+            freezeRI = pa,
+            getInputRI = NoEvent,
+            getPaddingRI = NoEvent,
+            getPhaseRI = Sweep,
+            getFitRI = f
+          }
+
+
+
+feed_ :: 
+    Monad m => 
+    i -> i -> RM a i o m Bool
+feed_ input padding =
+  do
+    ph <- gets getPhaseRI
+    if ph == Suspend
+        then
+          do
+            ri <- get
+            put $ ri {
+                getInputRI = input,
+                getPaddingRI = padding,
+                getPhaseRI = Feed
+              }
+            return True
+        else
+            return False
+
+feed :: 
+    Monad m => 
+    i -> RM a (Event i) o m Bool
+feed x = feed_ (Event x) NoEvent
+
+
+finalizeE :: 
+    Monad m => 
+    RM a (Event i) o m Bool
+finalizeE = feed_ End End
+
+
+freeze ::
+    Monad m =>
+    RM a i o m (ProcessA a i o)
+freeze = gets freezeRI
     
-    react End ph pa xs ys =
+
+sweep :: 
+    (ArrowApply a, Monad m) =>
+    RM a i o m o
+sweep =
+  do
+    pa <- freeze
+    fit <- gets getFitRI
+    ph <- gets getPhaseRI
+    x <- if ph == Feed
+        then gets getInputRI
+        else gets getPaddingRI
+    
+    (ph', y, pa') <- lift $ fit (step pa) (ph, x)
+    
+    ri <- get
+    put $ ri {
+        freezeRI = 
+            pa',
+        getPhaseRI = 
+            if ph' == Feed then Sweep else ph'
+      }
+
+    return y
+
+
+sweepAll :: 
+    (ArrowApply a, Monoid r, Monad m) =>
+    (o->r) ->
+    WriterT (WithEnd r) (RM a i (Event o) m) ()
+sweepAll outpre = 
+        while_ 
+            ((not . (== Suspend)) `liftM` lift (gets getPhaseRI)) $
+          do
+            evx <- lift sweep
+            case evx
+              of
+                Event x ->
+                    tell (WithEnd (outpre x) True)
+                NoEvent ->
+                    return ()
+                End ->
+                    tell (WithEnd mempty False)
+
+
+-- | Run a machine with results concatenated in terms of a monoid.
+runOn ::
+    (ArrowApply a, Monoid r) =>
+    (c -> r) ->
+    ProcessA a (Event b) (Event c) ->
+    a [b] r
+runOn outpre pa0 = unArrowMonad $ \xs ->
+  do
+    wer <- runRM arrowMonad pa0 $ execWriterT $ 
       do
-        go (adv ph) pa [] ys
+        go xs
+        lift (feed_ End End)
+        sweepAll outpre
+    return $ getRWE wer
 
-    react (Event y) ph pa xs ys =
-        go (adv ph) pa xs (\cont -> ys (y:cont))
+  where
+    go xs =
+      do
+        (_, wer) <- listen $ sweepAll outpre
+        if getContWE wer then cont xs else return ()
 
-    react NoEvent ph pa xs ys =
-        go (adv ph) pa xs ys
+    cont [] = return ()
+
+    cont (x:xs) =
+      do
+        lift $ feed x
+        go xs
+
+
+-- | Run a machine.
+run :: 
+    ArrowApply a => 
+    ProcessA a (Event b) (Event c) -> 
+    a [b] [c]
+run pa = 
+    runOn (\x -> Endo (x:)) pa >>>
+    arr (appEndo `flip` [])
+
+-- | Run a machine discarding all results.
+run_ :: 
+    ArrowApply a => 
+    ProcessA a (Event b) (Event c) -> 
+    a [b] ()
+run_ pa = 
+    runOn (const ()) pa
 
 
 -- | Represents return values and informations of step executions.
@@ -83,92 +234,63 @@ instance
     ExecInfo y1 c1 s1 `mappend` ExecInfo y2 c2 s2 = 
         ExecInfo (y1 <|> y2) (c1 || c2) (s1 || s2)
 
+
+-- | Execute until an input consumed and the machine suspended.
 stepRun :: 
     ArrowApply a =>
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo [c], ProcessA a (Event b) (Event c))
 
-
-
-stepRun pa = proc x ->
+stepRun pa0 = unArrowMonad $ \x ->
   do
-    (ys1, pa', _) <- go pa id -<< (Sweep, NoEvent)
-    (ys2, pa'', hsS) <- go pa' ys1 -<< (Feed, (Event x))
-    returnA -< (ExecInfo { yields = ys2 [], hasConsumed = True, hasStopped = hsS } , pa'')
+    (pa, wer)  <- runRM arrowMonad pa0 $ runWriterT $ 
+      do
+        sweepAll singleton
+        lift $ feed x
+        sweepAll singleton
+        lift $ freeze
+    return $ (retval wer, pa)
 
   where
-{-
-    -- Converted code below with arrowp.
-    -- Need refactoring overall this file, rather than rewrite here.
+    singleton x = Endo (x:)
 
-    go pa ys = step pa >>> proc (ph', evy, pa') ->
-      do
-        (| handle
-            (\y -> go pa' (\cont -> ys (y:cont)) -<< (adv ph', NoEvent))
-            (go pa' ys -<< (adv ph', NoEvent))
-            (returnA -< (ys, pa', case evy of {End->True; _->False}))
-         |)
-            (ph', evy)
--}
-    go pa ys
-          = step pa >>>
-              (arr (\ (ph', evy, pa') -> ((evy, pa', ph'), (ph', evy))) >>>
-                 handle
-                   (arr
-                      (\ ((evy, pa', ph'), y) ->
-                         (go pa' (\ cont -> ys (y : cont)), (adv ph', NoEvent)))
-                      >>> app)
-                   (arr (\ (evy, pa', ph') -> (go pa' ys, (adv ph', NoEvent))) >>>
-                      app)
-                   (arr
-                      (\ (evy, pa', ph') ->
-                         (ys, pa',
-                          case evy of
-                              End -> True
-                              _ -> False))))
+    retval WithEnd {..} = ExecInfo {
+        yields = appEndo getRWE [], 
+        hasConsumed = True, 
+        hasStopped = not getContWE
+      }
 
-                     
+-- | Execute until an output produced.
 stepYield :: 
     ArrowApply a =>
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo (Maybe c), ProcessA a (Event b) (Event c))
 
-stepYield pa = proc x ->
+stepYield pa0 = unArrowMonad $ \x -> runRM arrowMonad pa0 $ evalStateT `flip` mempty $
   do
-    (my, pa', hsS) <- go pa -<< (Sweep, NoEvent)
-    cont my pa' hsS -<< x
+    go x
+    r <- get
+    pa <- lift freeze
+    return (r, pa)
 
-  where
-    cont (Just y) pa' hsS = proc _ ->
-        returnA -< (ExecInfo { yields = Just y, hasConsumed = False, hasStopped = hsS}, pa')
-
-    cont Nothing pa' hsS = proc x ->
+  where 
+    go x =
       do
-        (my2, pa'', hsS') <- go pa' -<< (Feed, (Event x))
-        returnA -< (ExecInfo { yields = my2, hasConsumed = True, hasStopped = hsS}, pa'')
-{-
-    -- Converted code below with arrowp.
-    -- Need refactoring overall this file, rather than rewrite here.
+        csmd <- lift $ feed x
+        modify $ \ri -> ri { hasConsumed = csmd }
+                             
+        evo <- lift sweep
+        
+        case evo
+          of
+            Event y ->
+              do
+                modify $ \ri -> ri { yields = Just y }
+    
+            NoEvent ->
+              do
+                csmd <- gets hasConsumed
+                if csmd then return () else go x
 
-    go pa = step pa >>> proc (ph', evy, pa') ->
-      do
-        (| handle
-            (\y -> returnA -<< (Just y, pa', False))
-            (go pa' -<< (adv ph', NoEvent))
-            (returnA -< (Nothing, pa', case evy of {End->True; _->False}))
-         |)
-            (ph', evy)
--}
-    go pa = step pa >>>
-              (arr (\ (ph', evy, pa') -> ((evy, pa', ph'), (ph', evy))) >>>
-                 handle (arr (\ ((evy, pa', ph'), y) -> (Just y, pa', False)))
-                   (arr (\ (evy, pa', ph') -> (go pa', (adv ph', NoEvent))) >>> app)
-                   (arr
-                      (\ (evy, pa', ph') ->
-                         (Nothing, pa',
-                          case evy of
-                              End -> True
-                              _ -> False))))
-
-
-
+            End ->
+                modify $ \ri -> ri { hasStopped = True }
