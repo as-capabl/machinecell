@@ -2,6 +2,7 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 module
@@ -57,6 +58,7 @@ import Prelude hiding (filter)
 
 import Data.Monoid (mappend, mconcat)
 import Data.Tuple (swap)
+import Data.Maybe (fromMaybe)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Foldable as Fd
 import qualified Data.Traversable as Tv
@@ -66,7 +68,7 @@ import Control.Monad (liftM, forever)
 import Control.Monad.Trans
 import Control.Arrow
 import Control.Arrow.Operations (ArrowState(..))
-import Control.Arrow.Transformer.State (ArrowAddState(..))
+import Control.Arrow.Transformer.State (ArrowAddState(..), StateArrow())
 import Control.Applicative
 import Debug.Trace
 
@@ -74,6 +76,7 @@ import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Event
 import Control.Arrow.Machine.Event.Internal (Event(..))
 import Control.Arrow.Machine.ArrowUtil
+import Control.Arrow.Machine.Unsafe.Prim
 
 import qualified Control.Arrow.Machine.Plan as Pl
 import Control.Arrow.Machine.Exception
@@ -115,17 +118,20 @@ edge ::
     (ArrowApply a, Eq b) =>
     ProcessA a b (Event b)
 
-edge = ProcessA $ impl Nothing 
+edge = encloseState (unsafeExhaust impl) Nothing
   where
-    impl mvx = proc (ph, x) -> 
+    impl ::
+        (ArrowApply a, Eq b) =>
+        StateArrow (Maybe b) a b (Maybe b)
+    impl = proc x ->
       do
-        let equals = maybe False (==x) mvx
-            isActive = not $ ph == Suspend
-        returnA -< if (not equals) && isActive
-          then 
-            (Feed, Event x, ProcessA $ impl (Just x))
-          else
-            (ph `mappend` Suspend, NoEvent, ProcessA $ impl mvx)
+        mprv <- fetch -< ()
+        store -< Just x
+        returnA -<
+            case mprv
+              of
+                Just prv -> if prv == x then Nothing else Just x
+                Nothing -> Just x
 
 {-# DEPRECATED passRecent, withRecent "Use `hold` instead" #-}
 infixr 9 `passRecent`
@@ -412,10 +418,7 @@ rpSwitchB = rpSwitch broadcast
 peekState ::
     (ArrowApply a, ArrowState s a) =>
     ProcessA a e s
-peekState = ProcessA $ proc (ph, dm) ->
-  do
-    s <- fetch -< dm
-    returnA -< (ph `mappend` Suspend, s, peekState)
+peekState = unsafeSteady fetch
 
 encloseState ::
     (ArrowApply a, ArrowAddState s a a') =>
@@ -432,13 +435,13 @@ encloseState pa s = ProcessA $ proc (ph, x) ->
 
 -- |Make two event streams into one.
 -- Actually `gather` is more general and convenient;
--- @
---   ... <- tee -< (e1, e2)
--- @
+-- 
+-- @... <- tee -< (e1, e2)@
+-- 
 -- is equivalent to
--- @
---   ... <- gather -< [Left <$> e1, Right <$> e2]
--- @
+-- 
+-- @... <- gather -< [Left <$> e1, Right <$> e2]@
+-- 
 tee ::
     ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
 tee = join >>> go
@@ -547,10 +550,22 @@ onEnd = arr collapse >>> go
 -- Tipically used with rec statement.
 cycleDelay ::
     ArrowApply a => ProcessA a b b
-cycleDelay = ProcessA $ arr begin
+cycleDelay =
+    encloseState impl (Nothing, Nothing)
   where
-    begin (ph, x) = (ph `mappend` Suspend, x, ProcessA $ arr (go x))
-    go cur (Sweep, x) = (Suspend, cur, ProcessA $ arr (go x))
-    go cur (ph, _) = (ph, cur, ProcessA $ arr (go cur))
+    impl :: ArrowApply a => ProcessA (StateArrow (Maybe b, Maybe b) a) b b
+    impl = proc x ->
+      do
+        -- Load stored value when backtracking reaches here.
+        (_, stored) <- peekState -< ()
+        unsafeExhaust (app >>> arr (const Nothing)) -< appStore stored
 
+        -- Repeat current value.
+        (current, _) <- peekState -< ()
+        let x0 = fromMaybe x current
+        unsafeSteady store -< (Just x0, Just x)
+        returnA -< x0
+
+    appStore (Just x) = (proc _ -> store -< (Just x, Nothing), ())
+    appStore _ = (Cat.id, ())
     

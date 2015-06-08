@@ -358,6 +358,13 @@ utility =
             run (arr (\x->(x,x)) >>> first delay >>> arr fst) [0, 1, 2] `shouldBe` [0, 1, 2]
             run (arr (\x->(x,x)) >>> first delay >>> arr snd) [0, 1, 2] `shouldBe` [0, 1, 2]
 
+    describe "edge" $
+      do
+        it "detects edges of input behaviour" $
+          do
+            run (hold 0 >>> edge) [1, 1, 2, 2, 2, 3] `shouldBe` [0, 1, 2, 3]
+            run (hold 0 >>> edge) [0, 1, 1, 2, 2, 2, 3] `shouldBe` [0, 1, 2, 3]
+
     describe "accum" $
       do
         it "acts like fold." $

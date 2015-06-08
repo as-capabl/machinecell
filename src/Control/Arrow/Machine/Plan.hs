@@ -1,6 +1,5 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -20,6 +19,7 @@ module
         stop,
 
         stopped,
+        muted,
 
         -- * Constructing machines
         constructT,
@@ -53,7 +53,9 @@ stopped ::
 stopped = arr (const end)
 
 
-
+muted ::
+    (ArrowApply a, Occasional b) => ProcessA a b (Event c)
+muted = arr collapse >>> repeatedly await
 
 
 yield :: o -> Plan i o ()

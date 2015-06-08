@@ -25,6 +25,7 @@ module
         fromEq,
         
         edge,
+        asUpdater
       )
 where
 
@@ -126,3 +127,9 @@ edge ::
     ArrowApply a =>
     P.ProcessA a (T b) (P.Event b)
 edge = Arr.arr $ \(T ev x) -> x <$ ev
+
+asUpdater ::
+    ArrowApply a =>
+    a b c ->
+    P.ProcessA a (T b) (P.Event c)
+asUpdater ar = edge >>> P.anytime ar
