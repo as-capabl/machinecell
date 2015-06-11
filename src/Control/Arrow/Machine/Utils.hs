@@ -9,14 +9,11 @@ module
     Control.Arrow.Machine.Utils
       (
         -- * AFRP-like utilities
-        delay,
         hold,
         accum,
         edge,
         passRecent,
         withRecent,
-        feedback1,
-        feedback,
 
         -- * Switches
         -- | Switches inspired by Yampa library.
@@ -56,43 +53,23 @@ where
 
 import Prelude hiding (filter)
 
-import Data.Monoid (mappend, mconcat)
-import Data.Tuple (swap)
 import Data.Maybe (fromMaybe)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Foldable as Fd
-import qualified Data.Traversable as Tv
 import qualified Control.Category as Cat
-import Control.Monad.Reader (ask)
-import Control.Monad (liftM, forever)
 import Control.Monad.Trans
+import Control.Monad.State
 import Control.Arrow
 import Control.Arrow.Operations (ArrowState(..))
 import Control.Arrow.Transformer.State (ArrowAddState(..), StateArrow())
 import Control.Applicative
-import Debug.Trace
 
-import Control.Arrow.Machine.Types
-import Control.Arrow.Machine.Event
-import Control.Arrow.Machine.Event.Internal (Event(..))
 import Control.Arrow.Machine.ArrowUtil
-import Control.Arrow.Machine.Unsafe.Prim
-
-import qualified Control.Arrow.Machine.Plan as Pl
+import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Exception
 
 
 
-delay ::
-    (ArrowApply a, Occasional b) => ProcessA a b b
-
-delay = join >>> delayImpl >>> split
-  where
-    delayImpl = Pl.repeatedly $
-      do
-        mx <- liftM Just Pl.await `catch` return Nothing
-        Pl.yield noEvent
-        maybe Pl.stop Pl.yield mx
 
 
 hold :: 
@@ -109,10 +86,11 @@ hold old = proc evx ->
 
 accum ::
     ArrowApply a => b -> ProcessA a (Event (b->b)) b
-accum old = ProcessA $ proc (ph, evf) ->
-  do
-    let new = fromEvent id evf old
-    returnA -< (ph `mappend` Suspend, new, accum new)
+accum i = encloseState (go >>> peekState) i
+  where
+    go = repeatedlyT (ary0 $ statefully unArrowMonad) $ await >>= modify
+    
+  
 
 edge :: 
     (ArrowApply a, Eq b) =>
@@ -135,7 +113,6 @@ edge = encloseState (unsafeExhaust impl) Nothing
 
 {-# DEPRECATED passRecent, withRecent "Use `hold` instead" #-}
 infixr 9 `passRecent`
-infixr 9 `feedback`
 
 passRecent :: 
     (ArrowApply a, Occasional o) =>
@@ -163,253 +140,8 @@ withRecent af = proc (e, asevx) ->
       _ -> returnA -< noEvent
 
 
-{-# DEPRECATED feedback1, feedback "Use Pump instead" #-}
--- |Event version of loop (member of `ArrowLoop`).             
--- Yielding an event to feedback output always creates a new process cycle.
--- So be careful to make an infinite loop.
-feedback1 ::
-    (ArrowApply a, Occasional d) =>
-    ProcessA a (e, AS d) (c, d) ->
-    ProcessA a (AS e) c
-feedback1 pa = ProcessA $ proc (ph, ase) ->
-  do
-    (ph', (y, d), pa') <- step pa -< (ph, (fromAS ase, toAS noEvent))
-    returnA -< (ph', y, cont ph' d pa')
-  where
-    cont phPrev d paC 
-        | isOccasion d = ProcessA $ proc (ph, ase) ->
-          do
-            let 
-              (dIn, dOut, phPv2, phCur) = 
-                if ph == Suspend
-                  then
-                    (noEvent, const d, const phPrev, Suspend)
-                  else
-                    (d, id, id, ph `mappend` Feed)
-
-            (ph', (y, d'), pa') <- step paC -< (phCur, (fromAS ase, toAS dIn))
-            returnA -< (ph', y, cont (phPv2 ph') (dOut d') pa')
-
-        | isEnd d && phPrev == Feed = ProcessA $ proc (ph, ase) ->
-          do
-            (ph', (y, _), pa') <- step paC -< (ph, (fromAS ase, toAS end))
-            returnA -< (ph', y, proc asx -> arr fst <<< pa' -< (fromAS asx, toAS end))
-
-        | otherwise = feedback1 paC
 
 
--- |Artificially split into two arrow to use binary operator notation
--- rather than banana brackets.
-feedback ::
-    (ArrowApply a, Occasional d) =>
-    ProcessA a (e, AS d) b ->
-    ProcessA a (e, AS b) (c, d) ->
-    ProcessA a (AS e) c
-feedback pa pb = 
-    feedback1 $ proc (ase, x) -> 
-      do 
-        y <- pa -< (ase, x)
-        pb -< (ase, toAS y)
-
-
---
--- Switches
---
-evMaybePh :: b -> (a->b) -> (Phase, Event a) -> b
-evMaybePh _ f (Feed, Event x) = f x
-evMaybePh _ f (Sweep, Event x) = f x
-evMaybePh d _ _ = d
-
-
-switchCore sw cur cont = sw cur (arr test) cont' >>> arr fst
-  where
-    test (_, (_, evt)) = evt
-    cont' _ t = cont t >>> arr (\y -> (y, noEvent))
-
-switch :: 
-    ArrowApply a => 
-    ProcessA a b (c, Event t) -> 
-    (t -> ProcessA a b c) ->
-    ProcessA a b c
-
-switch = switchCore kSwitch
-
-
-dSwitch :: 
-    ArrowApply a => 
-    ProcessA a b (c, Event t) -> 
-    (t -> ProcessA a b c) ->
-    ProcessA a b c
-
-dSwitch = switchCore dkSwitch
-
-
-rSwitch :: 
-    ArrowApply a => ProcessA a b c -> 
-    ProcessA a (b, Event (ProcessA a b c)) c
-
-rSwitch cur = ProcessA $ proc (ph, (x, eva)) -> 
-  do
-    let now = evMaybePh cur id (ph, eva)
-    (ph', y, new) <-  step now -<< (ph, x)
-    returnA -< (ph', y, rSwitch new)
-
-
-drSwitch :: 
-    ArrowApply a => ProcessA a b c -> 
-    ProcessA a (b, Event (ProcessA a b c)) c
-
-drSwitch cur = ProcessA $ proc (ph, (x, eva)) -> 
-  do
-    (ph', y, new) <- step cur -< (ph, x)
-    
-    returnA -< (ph', y, next new eva)
-
-  where
-    next _ (Event af) = drSwitch af
-    next af _ = drSwitch af
-
-
-kSwitch ::
-    ArrowApply a => 
-    ProcessA a b c ->
-    ProcessA a (b, c) (Event t) ->
-    (ProcessA a b c -> t -> ProcessA a b c) ->
-    ProcessA a b c
-
-kSwitch sf test k = ProcessA $ proc (ph, x) ->
-  do
-    (ph', y, sf') <- step sf -< (ph, x)
-    (phT, evt, test') <- step test -< (ph', (x, y))
-
-    evMaybePh 
-        (arr $ const (phT, y, kSwitch sf' test' k)) 
-        (step . (k sf'))
-        (phT, evt)
-            -<< (phT, x)
-
-
-dkSwitch ::
-    ArrowApply a => 
-    ProcessA a b c ->
-    ProcessA a (b, c) (Event t) ->
-    (ProcessA a b c -> t -> ProcessA a b c) ->
-    ProcessA a b c
-
-dkSwitch sf test k = ProcessA $ proc (ph, x) ->
-  do
-    (ph', y, sf') <- step sf -< (ph, x)
-    (phT, evt, test') <- step test -< (ph', (x, y))
-    
-    let
-        nextA t = k sf' t
-        nextB = dkSwitch sf' test' k
-
-    returnA -< (phT, y, evMaybe nextB nextA evt)
-
-
-broadcast :: 
-    Functor col =>
-    b -> col sf -> col (b, sf)
-
-broadcast x sfs = fmap (\sf -> (x, sf)) sfs
-
-
-par ::
-    (ArrowApply a, Tv.Traversable col) =>
-    (forall sf. (b -> col sf -> col (ext, sf))) ->
-    col (ProcessA a ext c) ->
-    ProcessA a b (col c)
-
-par r sfs = ProcessA $ parCore r sfs >>> arr cont
-  where
-    cont (ph, ys, sfs') = (ph, ys, par r sfs')
-
-parB ::
-    (ArrowApply a, Tv.Traversable col) =>
-    col (ProcessA a b c) ->
-    ProcessA a b (col c)
-
-parB = par broadcast
-
-parCore ::
-    (ArrowApply a, Tv.Traversable col) =>
-    (forall sf. (b -> col sf -> col (ext, sf))) ->
-    col (ProcessA a ext c) ->
-    a (Phase, b) (Phase, col c, col (ProcessA a ext c))
-
-parCore r sfs = proc (ph, x) ->
-  do
-    let input = r x sfs
-
-    ret <- unwrapArrow (Tv.sequenceA (fmap (WrapArrow . appPh) input)) -<< ph
-
-    let ph' = Fd.foldMap getPh ret
-        zs = fmap getZ ret
-        sfs' = fmap getSf ret
-
-    returnA -< (ph', zs, sfs')
-
-  where
-    appPh (y, sf) = proc ph -> step sf -< (ph, y)
-
-    getPh (ph, _, _) = ph
-    getZ (_, z, _) = z
-    getSf (_, _, sf) = sf
-
-
-pSwitch ::
-    (ArrowApply a, Tv.Traversable col) =>
-    (forall sf. (b -> col sf -> col (ext, sf))) ->
-    col (ProcessA a ext c) ->
-    ProcessA a (b, col c) (Event mng) ->
-    (col (ProcessA a ext c) -> mng -> ProcessA a b (col c)) ->
-    ProcessA a b (col c)
-
-pSwitch r sfs test k = ProcessA $ proc (ph, x) ->
-  do
-    (ph', zs, sfs') <- parCore r sfs -<< (ph, x)
-    (phT, evt, test') <- step test -< (ph', (x, zs))
-
-    evMaybePh
-        (arr $ const (ph' `mappend` phT, zs, pSwitch r sfs' test' k))
-        (step . (k sfs') )
-        (phT, evt)
-            -<< (ph, x)
-
-pSwitchB ::
-    (ArrowApply a, Tv.Traversable col) =>
-    col (ProcessA a b c) ->
-    ProcessA a (b, col c) (Event mng) ->
-    (col (ProcessA a b c) -> mng -> ProcessA a b (col c)) ->
-    ProcessA a b (col c)
-
-pSwitchB = pSwitch broadcast
-
-
-rpSwitch ::
-    (ArrowApply a, Tv.Traversable col) =>
-    (forall sf. (b -> col sf -> col (ext, sf))) ->
-    col (ProcessA a ext c) ->
-    ProcessA a (b, Event (col (ProcessA a ext c) -> col (ProcessA a ext c)))
-        (col c)
-
-rpSwitch r sfs = ProcessA $ proc (ph, (x, evCont)) ->
-  do
-    let sfsNew = evMaybePh sfs ($sfs) (ph, evCont)
-    (ph', ws, sfs') <- parCore r sfsNew -<< (ph, x)
-    returnA -< (ph' `mappend` Suspend, ws, rpSwitch r sfs')
-
-
-rpSwitchB ::
-    (ArrowApply a, Tv.Traversable col) =>
-    col (ProcessA a b c) ->
-    ProcessA a (b, Event (col (ProcessA a b c) -> col (ProcessA a b c)))
-        (col c)
-
-rpSwitchB = rpSwitch broadcast
-
--- `dpSwitch` and `drpSwitch` are not implemented.
 
 
 --
@@ -420,15 +152,24 @@ peekState ::
     ProcessA a e s
 peekState = unsafeSteady fetch
 
+-- Should be exported?
+exposeState ::
+    (ArrowApply a, ArrowApply a', ArrowAddState s a a') =>
+    ProcessA a b c ->
+    ProcessA a' (b, s) (c, s)
+exposeState = fitEx es
+  where
+    es f = proc (p, (x, s)) ->
+      do
+        ((q, y), s') <- elimState f -< ((p, x), s)
+        returnA -< (q, (y, s'))
+
 encloseState ::
-    (ArrowApply a, ArrowAddState s a a') =>
+    (ArrowApply a, ArrowApply a', ArrowAddState s a a') =>
     ProcessA a b c ->
     s ->
     ProcessA a' b c
-encloseState pa s = ProcessA $ proc (ph, x) ->
-  do
-    ((ph', y, pa'), s') <- elimState (step pa) -< ((ph, x), s)
-    returnA -< (ph', y, encloseState pa' s')
+encloseState pa s = loop' s (exposeState pa)
 
 --
 -- other utility arrow
@@ -444,32 +185,30 @@ encloseState pa s = ProcessA $ proc (ph, x) ->
 -- 
 tee ::
     ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
-tee = join >>> go
-  where
-    go = Pl.repeatedly $ 
-      do
-        (evx, evy) <- Pl.await
-        evMaybe (return ()) (Pl.yield . Left) evx
-        evMaybe (return ()) (Pl.yield . Right) evy
+tee = proc (e1, e2) -> gather -< [Left <$> e1, Right <$> e2]
+
 
 
 sample ::
     ArrowApply a =>
     ProcessA a (Event b1, Event b2) [b1]
-sample = join >>> Pl.construct (go id) >>> hold []
+{-
+sample = join >>> construct (go id) >>> hold []
   where
     go l = 
       do
-        (evx, evy) <- Pl.await `catch` return (NoEvent, End)
+        (evx, evy) <- await `catch` return (NoEvent, End)
         let l2 = evMaybe l (\x -> l . (x:)) evx
         if isEnd evy
           then
           do
-            Pl.yield $ l2 []
-            Pl.stop
+            yield $ l2 []
+            stop
           else
             return ()
-        evMaybe (go l2) (\_ -> Pl.yield (l2 []) >> go id) evy
+        evMaybe (go l2) (\_ -> yield (l2 []) >> go id) evy
+-}
+sample = undefined
 
 -- |Make multiple event channels into one.
 -- If simultaneous events are given, lefter one is emitted earlier.
@@ -492,17 +231,17 @@ gather = arr (Fd.foldMap $ fmap singleton) >>> fork
 source ::
     (ArrowApply a, Fd.Foldable f) =>
     f c -> ProcessA a (Event b) (Event c)
-source l = Pl.construct $ Fd.mapM_ yd l
+source l = construct $ Fd.mapM_ yd l
   where
-    yd x = Pl.await >> Pl.yield x
+    yd x = await >> yield x
 
 -- |Given an array-valued event and emit it's values as inidvidual events.
 fork ::
     (ArrowApply a, Fd.Foldable f) =>
     ProcessA a (Event (f b)) (Event b)
 
-fork = Pl.repeatedly $ 
-    Pl.await >>= Fd.mapM_ Pl.yield
+fork = repeatedly $ 
+    await >>= Fd.mapM_ yield
 
 -- |Executes an action once per an input event is provided.
 anytime :: 
@@ -510,18 +249,22 @@ anytime ::
     a b c ->
     ProcessA a (Event b) (Event c)
 
-anytime action = Pl.repeatedlyT (ary0 unArrowMonad) $
+anytime action = repeatedlyT (ary0 unArrowMonad) $
   do
-    x <- Pl.await
+    x <- await
     ret <- lift $ arrowMonad action x
-    Pl.yield ret
+    yield ret
 
 
-filter cond = Pl.repeatedlyT (ary0 unArrowMonad) $
+filter ::
+    ArrowApply a =>
+    a b Bool ->
+    ProcessA a (Event b) (Event b)
+filter cond = repeatedlyT (ary0 unArrowMonad) $
   do
-    x <- Pl.await
+    x <- await
     b <- lift $ arrowMonad cond x
-    if b then Pl.yield x else return ()
+    if b then yield x else return ()
 
 
 echo :: 
@@ -535,16 +278,16 @@ now ::
     ProcessA a b (Event ())
 now = arr (const noEvent) >>> go
   where
-    go = Pl.construct $
-        Pl.yield () >> forever Pl.await
+    go = construct $
+        yield () >> forever await
 
 onEnd ::
     (ArrowApply a, Occasional b) =>
     ProcessA a b (Event ())
 onEnd = arr collapse >>> go
   where
-    go = Pl.repeatedly $
-        Pl.await `catch` (Pl.yield () >> Pl.stop)
+    go = repeatedly $
+        await `catch` (yield () >> stop)
     
 -- |Observe a previous value of a signal.
 -- Tipically used with rec statement.

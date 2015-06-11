@@ -25,16 +25,18 @@ module
         fromEq,
         
         edge,
-        asUpdater
+        asUpdater,
+        Alg
       )
 where
 
 import Prelude hiding (id, (.))
+import Control.Category
 import Control.Arrow hiding (arr)
+import Control.Applicative
 import qualified Control.Arrow as Arr
 import qualified Control.Arrow.Machine as P
 import Data.Monoid (mconcat, mappend)
-import Data.Functor
 
 data T a = T {
     updates :: (P.Event ()),
@@ -133,3 +135,18 @@ asUpdater ::
     a b c ->
     P.ProcessA a (T b) (P.Event c)
 asUpdater ar = edge >>> P.anytime ar
+
+
+
+newtype Alg a i o = Alg { eval :: P.ProcessA a i (T o) }
+
+instance
+    ArrowApply a => Functor (Alg a i)
+  where
+    fmap f alg = Alg $ eval alg >>> arr f
+
+instance
+    ArrowApply a => Applicative (Alg a i)
+  where
+    pure = Alg . constant
+    af <*> aa = Alg $ (eval af &&& eval aa) >>> arr2 ($)

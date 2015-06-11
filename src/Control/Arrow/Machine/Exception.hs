@@ -19,13 +19,8 @@ import qualified Control.Monad.Trans.Free.Church as F
 import Data.Functor ((<$>))
 
 import Control.Arrow.Machine.Types
-import Control.Arrow.Machine.Event
-import Control.Arrow.Machine.Event.Internal (Event(..))
-
 import Control.Arrow.Machine.Plan.Internal
-import Control.Arrow.Machine.Plan
 
-import Debug.Trace
 
 
 catch :: Monad m =>
@@ -33,6 +28,12 @@ catch :: Monad m =>
 
 catch pl cont = 
     F.toFT $ catch' (F.fromFT pl) (F.fromFT cont)
+
+catch' ::
+    Monad m =>
+    F.FreeT (PlanF t o) m a ->
+    F.FreeT (PlanF t o) m a ->
+    F.FreeT (PlanF t o) m a
 
 catch' (F.FreeT mf) cont@(F.FreeT mcont) = 
     F.FreeT $ mf >>= go
@@ -65,7 +66,7 @@ bracket_ :: Monad m =>
     PlanT i o m a -> PlanT i o m b-> PlanT i o m c -> PlanT i o m c
 bracket_ before after thing =
   do
-    before
+    _ <- before
     r <- thing `catch` (after >> stop)
     _ <- after
     return r

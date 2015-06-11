@@ -1,5 +1,5 @@
 name:                machinecell
-version:             1.4.0
+version:             2.0.0
 synopsis:            Arrow based stream transducers
 license:             BSD3
 license-file:        LICENSE
@@ -21,10 +21,19 @@ description:
 	AFRP-like utilities are also available.
 
 library
-  exposed-modules:     Control.Arrow.Machine, Control.Arrow.Machine.Event, Control.Arrow.Machine.Plan, Control.Arrow.Machine.Types, Control.Arrow.Machine.Utils, Control.Arrow.Machine.Running, Control.Arrow.Machine.ArrowUtil, Control.Arrow.Machine.Exception, Control.Arrow.Machine.Core, Control.Arrow.Machine.Unsafe.Prim, Control.Arrow.Machine.Misc.Pump, Control.Arrow.Machine.Misc.Discrete
-  other-modules:         Control.Arrow.Machine.Event.Internal, Control.Arrow.Machine.Plan.Internal
+  exposed-modules:
+        Control.Arrow.Machine,
+        Control.Arrow.Machine.Types,
+        Control.Arrow.Machine.Utils,
+        Control.Arrow.Machine.ArrowUtil,
+        Control.Arrow.Machine.Exception,
+        Control.Arrow.Machine.Misc.Pump,
+        Control.Arrow.Machine.Misc.Discrete
+  other-modules:
+        Control.Arrow.Machine.Plan.Internal
   other-extensions:    FlexibleInstances, Arrows, RankNTypes, TypeSynonymInstances, MultiParamTypeClasses, GADTs, FlexibleContexts, NoMonomorphismRestriction, RecursiveDo
-  build-depends:       base >=4.0 && <5.0, mtl >=2.0.1.1, free >=4.5, profunctors >=4.0, arrows >=0.4.1.2, semigroups >=0.8.3.1
+  ghc-options: -Wall
+  build-depends:       base >=4.0 && <5.0, mtl >=2.0.1.1, free >=4.5 && < 4.12, profunctors >=4.0, arrows >=0.4.1.2, semigroups >=0.8.3.1
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -34,7 +43,7 @@ Test-suite spec
   hs-source-dirs:      test
   main-is:             spec.hs
   other-modules:       RandomProc, LoopUtil
-  Build-depends:       base >=4.0 && <5.0, mtl >=2.0.1.1, profunctors >=4.0, QuickCheck >=1.0, hspec >=0.2.0, machinecell -any
+  Build-depends:       base >=4.0 && <5.0, mtl >=2.0.1.1, profunctors >=4.0, QuickCheck >=1.0, hspec >=0.2.0, arrows >=0.4.1.2, semigroups >=0.8.3.1, machinecell -any
 
 source-repository head
   type:		git

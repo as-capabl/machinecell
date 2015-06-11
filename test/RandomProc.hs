@@ -16,7 +16,10 @@ import Control.Monad.Trans
 import Control.Monad.State
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import Data.Maybe (fromJust)
+import Data.Monoid (Sum(..), getSum, mappend)
+import Data.Foldable (foldMap)
 
+evMap = arr . fmap
 
 data ProcJoin = PjFst ProcGen | PjSnd ProcGen | PjSum ProcGen
               deriving Show
@@ -104,9 +107,8 @@ mkProcJ :: ProcJoin -> MyProcT (Event Int, Event Int) (Event Int)
 
 mkProcJ (PjFst pg) = arr fst
 mkProcJ (PjSnd pg) = arr snd
-mkProcJ (PjSum pg) = arr go
-  where
-    go (evx, evy) = (+ fromEvent 0 evy) <$> evx
+mkProcJ (PjSum pg) = proc (evx, evy) ->
+    returnA -< getSum <$> foldMap (Sum <$>) [evx, evy]
 
 
 stateProc :: MyProcT (Event a) (Event b) -> [a] -> ([b], [Int])
@@ -159,13 +161,11 @@ instance
 instance
     (TestOut a, TestOut b) => TestOut (a, b)
   where
-    output = output *** output >>> P.join >>> mc >>> P.split
-      where
-        mc = repeatedly $
-          do
-            (x, y) <- await
-            yield x
-            yield y
+    output = proc (x1, x2) ->
+      do
+        y1 <- output -< x1
+        y2 <- output -< x2
+        gather -< [y1, y2]
 
 instance
     (TestIn a, TestIn b) => 
@@ -174,7 +174,7 @@ instance
     input = proc evx ->
       do
         -- 一個前の値で分岐してみる
-        b <- hold True <<< delay -< 
+        b <- cycleDelay <<< hold True -< 
                (\x -> x `mod` 2 == 0) <$> evx
 
         if b
@@ -182,7 +182,6 @@ instance
             arr Left <<< input -< evx
           else
             arr Right <<< input -< evx
-
 
 instance
     (TestOut a, TestOut b) => TestOut (Either a b)

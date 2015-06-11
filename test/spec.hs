@@ -37,7 +37,6 @@ main = hspec $
     plans
     utility
     switches
-    operator
     execution
     loopUtil
 
@@ -220,14 +219,16 @@ loops =
       do
         it "can be used with rec statement(pure)" $
           let
-              a = proc x ->
+              a = proc ev ->
                 do
-                  rec l <- returnA -< evMaybe [] (:l) x
-                  returnA -< l <$ x
+                  x <- hold 0 -< ev
+                  rec l <- returnA -< x:l
+                  returnA -< l <$ ev
               result = fst $ stateProc a [2, 5]
             in
               take 3 (result!!1) `shouldBe` [5, 5, 5]
 
+{-
         it "can be used with rec statement(macninery)" $
           let
               mc = anytime Cat.id
@@ -254,6 +255,7 @@ loops =
                         z <- hold 0 <<< delay -< y
                     returnA -< y
             run pa [1, 10] `shouldBe` [1, 2, 12, 24]
+-}
 
     describe "Rules for ArrowLoop" $
       do
@@ -351,13 +353,6 @@ plans = describe "Plan" $
 
 utility =
   do
-    describe "delay" $
-      do
-        it "delays input" $
-          do
-            run (arr (\x->(x,x)) >>> first delay >>> arr fst) [0, 1, 2] `shouldBe` [0, 1, 2]
-            run (arr (\x->(x,x)) >>> first delay >>> arr snd) [0, 1, 2] `shouldBe` [0, 1, 2]
-
     describe "edge" $
       do
         it "detects edges of input behaviour" $
@@ -388,29 +383,6 @@ utility =
                     ed <- onEnd -< evx
                     returnA -< x <$ ed
             run pa [1..4] `shouldBe` [4]
-
-    describe "sample" $
-      do
-        it "samples events in terms of the 2nd input." $
-          do
-            let
-                pa = proc evx ->
-                  do
-                    evy <- fork -< (\x -> [x, x]) <$> evx
-                    ys <- sample -< (evy, evx)
-                    ed <- onEnd -< evy
-                    outEv <- gather -< [() <$ evx, ed]
-                    returnA -< ys <$ outEv
-            Control.Monad.join (run pa [1..3]) `shouldBe` [1, 1, 2, 2, 3, 3]
-
-        it "correctly pushes simultaneous events into the same time." $
-          do
-            let 
-                pa = proc evx ->
-                  do
-                    l <- sample -< (evx, evx)
-                    returnA -< l <$ evx
-            run pa [1..3] `shouldBe` [[1], [2], [3]]
 
     describe "gather" $
       do
@@ -477,46 +449,6 @@ switches =
             ret `shouldBe` [7, 2, 6, 18, 21]
             retD `shouldBe` [7, 3, 6, 12, 21]
 
-
-operator = describe "Operators on ProcessA"$
-  do
-    describe "feedback" $
-      do
-        it "acts like local variable with hold." $
-          do
-            let 
-                pa = proc evx ->
-                  do
-                    (\evy -> hold 10 -< evy)
-                      `feedback` \y ->
-                      do
-                        returnA -< ((+y) <$> evx, (y+1) <$ evx)
-            run pa [1, 2, 3] `shouldBe` [11, 13, 15]
-
-        it "correctly handles stream end." $
-          do
-            let 
-                pa = proc x -> 
-                    (\asx -> returnA -< asx)
-                  `feedback` 
-                    (\asy -> returnA -< (asy::Event Int, x))
-                comp = mkProc (PgPush PgStop) >>> pa
-            stateProc comp [0, 0] `shouldBe` ([], [0])
-
-        it "correctly handles stream end.(2)" $
-          do
-            pendingWith "now many utilities behave incorrectly at the end of stream."
-{-
-            let pa = proc x -> (| feedback1 (\y -> returnA -< (y::Event Int, x)) |)
-            let comp = mkProc (PgPush PgStop) >>> pa >>> mkProc (PgDouble PgNop)
-            stateProc comp [0, 0] `shouldBe` ([], [0])
-
-        prop "delays the feedback input." $ \cond ->
-            let 
-                equiv = mkEquivTest cond
-              in
-                delay `equiv` proc x -> (| feedback1 (\y -> returnA -< (y::Event Int, x)) |)
--}
 
 execution = describe "Execution of ProcessA" $
     do

@@ -30,7 +30,7 @@ import Control.Arrow
 import qualified Control.Arrow.Machine as P
 import Data.Monoid (Endo(Endo), mappend, appEndo)
 
-newtype Duct a = Duct { unDuct :: Endo [a] }
+newtype Duct a = Duct (Endo [a])
 
 oneMore ::
     ArrowApply a =>
