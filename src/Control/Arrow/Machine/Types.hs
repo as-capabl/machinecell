@@ -17,6 +17,9 @@ module
 
         Occasional (..),
         Event (),
+        condEvent,
+        filterEvent,
+        evMap,
         
         -- * Plan monads
         PlanT,
@@ -123,7 +126,7 @@ type StepType a b c = a (Phase, b) (Phase, c, ProcessA a b c)
 -- May use `ArrowChoice` and `ArrowLoop` instance too.
 -- but there is a limitation that `loop` cannot propagate `Event`s to upstream.
 -- In such case, use `Control.Arrow.Machine.Utils.feedback` instead.
-data ProcessA a b c = ProcessA { 
+newtype ProcessA a b c = ProcessA { 
       step :: StepType a b c
     }
 
@@ -166,7 +169,7 @@ dimapStep f g stp = proc (ph, x) ->
   do
     (ph', y, pa') <- stp -< (ph, f x)
     returnA -< (ph', g y, dimap f g pa')
-{-# INLINE [1] dimapStep #-}
+{-# NOINLINE dimapStep #-}
 
 instance
     Arrow a => Functor (ProcessA a i)
@@ -183,7 +186,7 @@ instance
 instance
     ArrowApply a => Cat.Category (ProcessA a)
   where
-    id = ProcessA (arrStep id)
+    id = ProcessA idStep
     {-# INLINE id #-}
     g . f = ProcessA $ compositeStep (step f) (step g)
     {-# INLINE (.) #-}
@@ -195,11 +198,11 @@ instance
     arr = ProcessA . arrStep
     {-# INLINE arr #-}
 
-    first pa = ProcessA $ proc (ph, (x, d)) ->
-      do
-        (ph', y, pa') <- step pa -< (ph, x)
-        returnA -< (ph' `mappend` Suspend, (y, d), first pa')
+    first pa = ProcessA $ parStep (step pa) idStep
     {-# INLINE first #-}
+
+    second pa = ProcessA $ parStep idStep (step pa)
+    {-# INLINE second #-}
 
     pa *** pb = ProcessA $ parStep (step pa) (step pb)
     {-# INLINE (***) #-}
@@ -214,19 +217,24 @@ parStep f g = proc (ph, (x1, x2)) ->
     (ph1, y1, pa') <- f -< (ph, x1)
     (ph2, y2, pb') <- g -< (ph, x2)
     returnA -< (ph1 `mappend` ph2, (y1, y2), pa' *** pb')
-{-# INLINE [1] parStep #-}
+{-# NOINLINE parStep #-}
+
+idStep :: ArrowApply a => StepType a b b
+idStep = proc (ph, x) ->
+    returnA -< (ph `mappend` Suspend, x, ProcessA $ idStep)
+{-# NOINLINE idStep #-}
 
 arrStep :: ArrowApply a => (b->c) -> StepType a b c
 arrStep f = proc (ph, x) ->
     returnA -< (ph `mappend` Suspend, f x, ProcessA $ arrStep f)
-{-# INLINE [1] arrStep #-}
+{-# NOINLINE arrStep #-}
 
 
 -- |Composition is proceeded by the backtracking strategy.
 compositeStep :: ArrowApply a => 
               StepType a b d -> StepType a d c -> StepType a b c
 compositeStep f g = proc (ph, x) -> compositeStep' ph f g -<< (ph, x)
-{-# INLINE [1] compositeStep #-}
+{-# NOINLINE compositeStep #-}
 
 compositeStep' :: ArrowApply a => 
               Phase -> 
@@ -260,27 +268,57 @@ compositeStep' ph f g = proc (_, x) ->
 
 -- rules
 {-# RULES
+"ProcessA: id/*"
+    forall g. compositeStep idStep g = g
+"ProcessA: */id"
+    forall f. compositeStep f idStep = f
+
 "ProcessA: concat/concat" 
     forall f g h. compositeStep (compositeStep f g) h = compositeStep f (compositeStep g h)
-"ProcessA: arr/arr"
-    forall f g. compositeStep (arrStep f) (arrStep g) = arrStep (g . f)
-"ProcessA: arr/*"
-    forall f g. compositeStep (arrStep f) g = dimapStep f id g
-"ProcessA: */arr"
-    forall f g. compositeStep f (arrStep g) = dimapStep id g f
+
 "ProcessA: dimap/dimap"
     forall f g h i j. dimapStep f j (dimapStep g i h)  = dimapStep (g . f) (j . i) h
 "ProcessA: dimap/arr"
     forall f g h. dimapStep f h (arrStep g) = arrStep (h . g . f)
-"ProcessA: par/par"
-    forall f1 f2 g1 g2 h. compositeStep (parStep f1 f2) (compositeStep (parStep g1 g2) h) =
-        compositeStep (parStep (compositeStep f1 g1) (compositeStep f2 g2)) h
-"ProcessA: par/par-2"
-    forall f1 f2 g1 g2. compositeStep (parStep f1 f2) (parStep g1 g2) =
-        parStep (compositeStep f1 g1) (compositeStep f2 g2)
+
+"ProcessA: arr***/par"
+    forall f1 f2 g1 g2 h. compositeStep (parStep f1 (arrStep f2)) (compositeStep (parStep g1 g2) h) =
+        compositeStep (parStep (compositeStep f1 g1) (dimapStep f2 id g2)) h
+"ProcessA: arr***/par-2"
+    forall f1 f2 g1 g2. compositeStep (parStep f1 (arrStep f2)) (parStep g1 g2) =
+        parStep (compositeStep f1 g1) (dimapStep f2 id g2)
+"ProcessA: par/***arr"
+    forall f1 f2 g1 g2 h. compositeStep (parStep f1 f2) (compositeStep (parStep (arrStep g1) g2) h) =
+        compositeStep (parStep (dimapStep id g1 f1) (compositeStep f2 g2)) h
+"ProcessA: par/***arr-2"
+    forall f1 f2 g1 g2. compositeStep (parStep f1 f2) (parStep (arrStep g1) g2) =
+        parStep (dimapStep id g1 f1) (compositeStep f2 g2)
+
+"ProcessA: first/par"
+    forall f1 g1 g2 h. compositeStep (parStep f1 idStep) (compositeStep (parStep g1 g2) h) =
+        compositeStep (parStep (compositeStep f1 g1) g2) h
+"ProcessA: first/par-2"
+    forall f1 g1 g2. compositeStep (parStep f1 idStep) (parStep g1 g2) =
+        parStep (compositeStep f1 g1) g2
+"ProcessA: par/second"
+    forall f1 f2 g2 h. compositeStep (parStep f1 f2) (compositeStep (parStep idStep g2) h) =
+        compositeStep (parStep f1 (compositeStep f2 g2)) h
+"ProcessA: par/second-2"
+    forall f1 f2 g2. compositeStep (parStep f1 f2) (parStep idStep g2) =
+        parStep f1 (compositeStep f2 g2)
+
+"ProcessA: arr/arr"
+    forall f g h. compositeStep (arrStep f) (compositeStep (arrStep g) h) =
+        compositeStep (arrStep (g . f)) h
+"ProcessA: arr/arr-2"
+    forall f g. compositeStep (arrStep f) (arrStep g) = arrStep (g . f)
+"ProcessA: arr/*" [1]
+    forall f g. compositeStep (arrStep f) g = dimapStep f id g
+"ProcessA: */arr" [1]
+    forall f g. compositeStep f (arrStep g) = dimapStep id g f
+"ProcessA: arr***arr" [0]
+    forall f g. parStep (arrStep f) (arrStep g) = arrStep (f *** g)
   #-}
-
-
 
 instance
     ArrowApply a => ArrowChoice (ProcessA a)
@@ -478,25 +516,19 @@ fromEvent :: Arrow a => b -> a (Event b) b
 fromEvent x = evMaybe x id
 -}
 
-{-
 -- TODO: テスト
 condEvent :: Bool -> Event a -> Event a
 condEvent _ End = End
 condEvent True ev = ev
-condEvent False ev = NoEvent
--}
+condEvent False _ = NoEvent
 
-{-
 -- TODO: テスト
 filterEvent :: (a -> Bool) -> Event a -> Event a
 filterEvent cond ev@(Event x) = condEvent (cond x) ev
 filterEvent _ ev = ev
--}
 
-{-
 evMap ::  Arrow a => (b->c) -> a (Event b) (Event c)
 evMap = arr . fmap
--}
 
 {-
 -- TODO: テスト
