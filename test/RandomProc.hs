@@ -19,7 +19,6 @@ import Data.Maybe (fromJust)
 import Data.Monoid (Sum(..), getSum, mappend)
 import Data.Foldable (foldMap)
 
-evMap = arr . fmap
 
 data ProcJoin = PjFst ProcGen | PjSnd ProcGen | PjSum ProcGen
               deriving Show

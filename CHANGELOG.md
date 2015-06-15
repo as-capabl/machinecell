@@ -1,3 +1,12 @@
+2.0.0
+------------
+* Relocate files
+* Performance improve
+* Added primitives: `fitEx`, `unsafeSteady`, `unsafeExhaust`
+* Added: `condEvent`, `filterEvent`, `muted`
+* Added to Misc: `Discrete`, `Pump.asUpdater`, `Pump.Alg`
+* Deleted deprecated: `hEv`, `hEv'`, `evMaybe`, `fromEvent`, `split`,
+  `join`, `split2`, `join2`, `feedback`, `feedback1`
 
 1.3.1
 ------------
