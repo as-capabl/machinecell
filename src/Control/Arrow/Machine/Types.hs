@@ -883,16 +883,19 @@ rpSwitchB = rpSwitch broadcast
 -- How many times `p` is called is indefinite.
 -- So `p` must satisfy the equation below;
 --
--- @p === p &&& p >>> arr fst === p &&& p >>> arr snd@
+-- @p &&& p === p >>> (id &&& id)@
 unsafeSteady ::
     ArrowApply a =>
     a b c ->
     ProcessA a b c
-unsafeSteady p = ProcessA $ proc (ph, x) ->
-  do
-    y <- p -< x
-    returnA -< (ph `mappend` Suspend, y, unsafeSteady p)
-  
+unsafeSteady f =
+    fitEx
+        (\id' ->
+            arr (\(p, x)->((p, ()), x)) >>>
+            (id' *** f) >>>
+            arr (\((q, ()), y)->(q, y)))
+        Cat.id
+      
     
 -- | Repeatedly call `p`.
 --    
@@ -967,7 +970,7 @@ data RunInfo a i o m = RunInfo {
     getPaddingRI :: i,
     getPhaseRI :: Phase,
     getFitRI :: forall p q. a p q -> p -> m q
-}
+  }
 
 type RM a i o m = StateT (RunInfo a i o m) m
 
