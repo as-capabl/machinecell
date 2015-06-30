@@ -15,6 +15,7 @@ module
         -- * Basic types
         ProcessA(),
 
+        Occasional' (..),
         Occasional (..),
         Event (),
         condEvent,
@@ -28,6 +29,7 @@ module
         await,
         yield,
         stop,
+        catchP,
 
         stopped,
         muted,
@@ -69,10 +71,10 @@ module
         
         -- * Primitive machines - other safe primitives
         fit,
-        fitEx,
         loop',
         
         -- * Primitive machines - unsafe
+        fitEx,
         unsafeSteady,
         unsafeExhaust,
       )
@@ -95,7 +97,6 @@ import Data.Semigroup (Semigroup, (<>))
 import qualified Control.Monad.Trans.Free as F
 import qualified Control.Monad.Trans.Free.Church as F
 import Control.Arrow.Machine.ArrowUtil
-import Control.Arrow.Machine.Plan.Internal
 
 
 -- | To get multiple outputs by one input, the `Phase` parameter is introduced.
@@ -122,10 +123,6 @@ type StepType a b c = a (Phase, b) (Phase, c, ProcessA a b c)
 -- To construct `ProcessA` instances, use `Control.Arrow.Machine.Plan.Plan`,
 -- `arr`, functions declared in `Control.Arrow.Machine.Utils`,
 -- or arrow combinations of them.
---
--- May use `ArrowChoice` and `ArrowLoop` instance too.
--- but there is a limitation that `loop` cannot propagate `Event`s to upstream.
--- In such case, use `Control.Arrow.Machine.Utils.feedback` instead.
 newtype ProcessA a b c = ProcessA { 
       step :: StepType a b c
     }
@@ -383,32 +380,6 @@ instance
     fmap _ End = End
     fmap f (Event x) = Event (f x)
 
-{-
-instance 
-    Applicative Event 
-  where
-    pure = Event
-
-    (Event f) <*> (Event x) = Event $ f x
-    End <*> _ = End
-    _ <*> End = End
-    _ <*> _ = NoEvent
--}
-
-instance
-    Foldable Event
-  where
-    foldMap f (Event x) = f x
-    foldMap _ NoEvent = mempty
-    foldMap _ End = mempty
-
-
-instance
-    Traversable Event
-  where
-    traverse f (Event x) = Event <$> f x
-    traverse _ NoEvent = Ap.pure NoEvent
-    traverse _ End = Ap.pure End
 
 instance
     Semigroup a => Monoid (Event a)
@@ -421,100 +392,57 @@ instance
     _ `mappend` NoEvent = NoEvent
     _ `mappend` _ = End
 
-{-
-instance
-    Monad Event
-  where
-    return = Event
-
-    Event x >>= f = f x
-    NoEvent >>= _ = NoEvent
-    End >>= _ = End
-
-    _ >> End = End
-    l >> r = l >>= const r
-    
-    fail _ = End
 
 
-instance
-    MonadPlus Event
-  where
-    mzero = End
-
-    Event x `mplus` _ = Event x
-    _ `mplus` Event x = Event x
-    End `mplus` r = r
-    l `mplus` End = l
-    _ `mplus` _ = NoEvent
--}
-
-
-
-
+-- | Signals that can be absent(`NoEvent`) or end.
+-- For composite structure, `collapse` can be defined as monoidal sum of all member occasionals.
 class 
-    Occasional a
+    Occasional' a
   where
     collapse :: a -> Event ()
+
+-- | Occasional signals with creation methods.
+class
+    Occasional' a => Occasional a
+  where
     noEvent :: a
     end :: a
 
-    isNoEvent :: a -> Bool
-    isNoEvent = collapse >>> \case { NoEvent -> True; _ -> False }
 
-    isEnd :: a -> Bool
-    isEnd = collapse >>> \case { End -> True; _ -> False }
+isNoEvent :: Occasional' a => a -> Bool
+isNoEvent = collapse >>> \case { NoEvent -> True; _ -> False }
 
-    isOccasion :: a -> Bool
-    isOccasion = collapse >>> \case { Event () -> True; _ -> False }
+isEnd :: Occasional' a => a -> Bool
+isEnd = collapse >>> \case { End -> True; _ -> False }
+
+{-
+isOccasion :: Occasional' a => a -> Bool
+isOccasion = collapse >>> \case { Event () -> True; _ -> False }
+-}
+
+instance
+    (Occasional' a, Occasional' b) => Occasional' (a, b)
+  where
+    collapse (x, y) = collapse x `mappend` collapse y
 
 instance
     (Occasional a, Occasional b) => Occasional (a, b)
   where
-    collapse (x, y) = collapse x `mappend` collapse y
     noEvent = (noEvent, noEvent)
     end = (end, end)
 
+instance 
+    Occasional' (Event a)
+  where
+    collapse = (() <$)
 
 instance 
     Occasional (Event a)
   where
-    collapse = (() <$)
     noEvent = NoEvent
     end = End
 
-{-
-hEv :: ArrowApply a => a (e,b) c -> a e c -> a (e, Event b) c
-hEv f1 f2 = proc (e, ev) ->
-    helper ev -<< e
-  where
-    helper (Event x) = proc e -> f1 -< (e, x)
-    helper NoEvent = f2
-    helper End = f2
 
-hEv' :: ArrowApply a => a (e,b) c -> a e c -> a e c -> a (e, Event b) c
-hEv' f1 f2 f3 = proc (e, ev) ->
-    helper ev -<< e
-  where
-    helper (Event x) = proc e -> f1 -< (e, x)
-    helper NoEvent = f2
-    helper End = f3
--}
-
-
-
-evMaybe :: Arrow a => c -> (b->c) -> a (Event b) c
-evMaybe r f = arr go
-  where
-    go (Event x) = f x
-    go NoEvent = r
-    go End = r
-
-
-{-
-fromEvent :: Arrow a => b -> a (Event b) b
-fromEvent x = evMaybe x id
--}
 
 -- TODO: テスト
 condEvent :: Bool -> Event a -> Event a
@@ -527,31 +455,27 @@ filterEvent :: (a -> Bool) -> Event a -> Event a
 filterEvent cond ev@(Event x) = condEvent (cond x) ev
 filterEvent _ ev = ev
 
+-- | Alias of "arr . fmap"
+--
+-- While "ProcessA a (Event b) (Event c)" means a transducer from b to c,
+-- function b->c can be lifted into a transducer by fhis function.
+-- 
+-- But in most cases you needn't call this function in proc-do notations,
+-- because `arr`s are completed automatically while desugaring.
+--
+-- For example,
+--
+-- @
+-- proc x -> returnA -\< f \<$\> x
+-- @
+--
+-- is equivalent to
+--
+-- @
+-- evMap f
+-- @            
 evMap ::  Arrow a => (b->c) -> a (Event b) (Event c)
 evMap = arr . fmap
-
-{-
--- TODO: テスト
-split :: (Arrow a, Occasional b) => a (Event b) b
-split = arr go
-  where
-    go (Event x) = x
-    go NoEvent = noEvent
-    go End = end
-
-
-join :: (Arrow a, Occasional b) => a b (Event b)
-join = arr $ \x -> x <$ collapse x
-
-
-split2 :: Event (Event a, Event b) -> (Event a, Event b)
-split2 = split
-
-
-join2 :: (Event a, Event b) -> Event (Event a, Event b)
-join2 = join
--}
-
 
 
 stopped :: 
@@ -560,8 +484,26 @@ stopped = arr (const end)
 
 
 muted ::
-    (ArrowApply a, Occasional b) => ProcessA a b (Event c)
-muted = arr collapse >>> repeatedly await
+    (ArrowApply a, Occasional' b, Occasional c) => ProcessA a b c
+muted = proc x ->
+  do
+    rSwitch (arr $ const noEvent) -< ((), stopped <$ collapse x)
+
+
+
+data PlanF i o a where
+  AwaitPF :: (i->a) -> a -> PlanF i o a
+  YieldPF :: o -> a -> PlanF i o a
+  StopPF :: PlanF i o a
+
+instance (Functor (PlanF i o)) where
+  fmap g (AwaitPF f ff) = AwaitPF (g . f) (g ff)
+  fmap g (YieldPF x r) = YieldPF x (g r)
+  fmap _ StopPF = StopPF
+
+
+type PlanT i o m a = F.FT (PlanF i o) m a
+type Plan i o a = forall m. Monad m => PlanT i o m a
 
 
 yield :: o -> Plan i o ()
@@ -574,6 +516,28 @@ stop :: Plan i o a
 stop = F.liftF $ StopPF
 
 
+catchP:: Monad m =>
+    PlanT i o m a -> PlanT i o m a -> PlanT i o m a
+
+catchP pl cont = 
+    F.toFT $ catch' (F.fromFT pl) (F.fromFT cont)
+
+catch' ::
+    Monad m =>
+    F.FreeT (PlanF t o) m a ->
+    F.FreeT (PlanF t o) m a ->
+    F.FreeT (PlanF t o) m a
+
+catch' (F.FreeT mf) cont@(F.FreeT mcont) = 
+    F.FreeT $ mf >>= go
+  where
+    go (F.Pure a) = return $ F.Pure a
+    go (F.Free StopPF) = mcont
+    go (F.Free (AwaitPF f ff)) = 
+        return $ F.Free $ 
+        AwaitPF (\i -> f i `catch'` cont) (ff `catch'` cont)
+    go (F.Free fft) = 
+        return $ F.Free $ (`catch'` cont) <$> fft
 
 
 
@@ -724,13 +688,7 @@ drSwitch ::
 drSwitch cur = ProcessA $ proc (ph, (x, eva)) -> 
   do
     (ph', y, new) <- step cur -< (ph, x)
-    
-    returnA -< (ph', y, next new eva)
-
-  where
-    next _ (Event af) = drSwitch af
-    next af _ = drSwitch af
-
+    returnA -< (ph', y, drSwitch (evMaybePh new id (ph, eva)))
 
 kSwitch ::
     ArrowApply a => 
@@ -767,7 +725,7 @@ dkSwitch sf test k = ProcessA $ proc (ph, x) ->
         nextA t = k sf' t
         nextB = dkSwitch sf' test' k
 
-    returnA -< (phT, y, evMaybe nextB nextA evt)
+    returnA -< (phT, y, evMaybePh nextB nextA (ph, evt))
 
 
 broadcast :: 
@@ -1198,3 +1156,5 @@ stepYield pa0 = unArrowMonad $ \x -> runRM arrowMonad pa0 $ evalStateT `flip` me
 
             End ->
                 modify $ \ri -> ri { hasStopped = True }
+
+

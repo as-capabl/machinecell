@@ -66,7 +66,6 @@ import Control.Applicative
 
 import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
-import Control.Arrow.Machine.Exception
 
 
 
@@ -82,14 +81,13 @@ hold old = ProcessA $ proc (ph, evx) ->
 -}
 hold old = proc evx -> 
   do
-    rSwitch (arr $ const old) -< ((), arr . const <$> evx)
+    rSwitch (pure old) -< ((), pure <$> evx)
 
 accum ::
     ArrowApply a => b -> ProcessA a (Event (b->b)) b
-accum i = encloseState (go >>> peekState) i
+accum x = switch (pure x &&& arr (($x)<$>)) accum'
   where
-    go = repeatedlyT (ary0 $ statefully unArrowMonad) $ await >>= modify
-    
+    accum' y = dSwitch (pure y &&& Cat.id) (const (accum y))
   
 
 edge :: 
@@ -177,11 +175,11 @@ encloseState pa s = loop' s (exposeState pa)
 -- |Make two event streams into one.
 -- Actually `gather` is more general and convenient;
 -- 
--- @... <- tee -< (e1, e2)@
+-- @... \<- tee -\< (e1, e2)@
 -- 
 -- is equivalent to
 -- 
--- @... <- gather -< [Left <$> e1, Right <$> e2]@
+-- @... \<- gather -\< [Left \<$\> e1, Right \<$\> e2]@
 -- 
 tee ::
     ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
@@ -220,11 +218,14 @@ gather = arr (Fd.foldMap $ fmap singleton) >>> fork
     singleton x = x NonEmpty.:| []
 
 -- | Provides a source event stream.
--- A dummy input event stream is needed. 
+-- A dummy input event stream is needed.
+--   
 -- @
 --   run af [...]
 -- @
+--   
 -- is equivalent to
+--
 -- @
 --   run (source [...] >>> af) (repeat ())
 -- @
@@ -282,12 +283,12 @@ now = arr (const noEvent) >>> go
         yield () >> forever await
 
 onEnd ::
-    (ArrowApply a, Occasional b) =>
+    (ArrowApply a, Occasional' b) =>
     ProcessA a b (Event ())
 onEnd = arr collapse >>> go
   where
     go = repeatedly $
-        await `catch` (yield () >> stop)
+        await `catchP` (yield () >> stop)
     
 -- |Observe a previous value of a signal.
 -- Tipically used with rec statement.

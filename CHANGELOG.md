@@ -6,7 +6,9 @@
 * Added: `condEvent`, `filterEvent`, `muted`
 * Added to Misc: `Discrete`, `Pump.asUpdater`, `Pump.Alg`
 * Deleted deprecated: `hEv`, `hEv'`, `evMaybe`, `fromEvent`, `split`,
-  `join`, `split2`, `join2`, `feedback`, `feedback1`
+  `join`, `split2`, `join2`, `feedback`, `feedback1`, `isNoEvent`, `isOccasional`, `isEnd`
+* Deleted `Foldable` and `Traversable` instance of `Event`.
+* Added `Occasional'` by splitting some members from `Occasional`
 
 1.3.1
 ------------

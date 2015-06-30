@@ -344,7 +344,7 @@ plans = describe "Plan" $
       do
         let pl2 =
               do
-                x <- await `catch` (yield 1 >> stop)
+                x <- await `catchP` (yield 1 >> stop)
                 yield x
                 y <- await 
                 yield y
