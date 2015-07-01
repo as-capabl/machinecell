@@ -1,6 +1,7 @@
 2.0.0
 ------------
 * Relocate files
+    * `catch` and its families are moved to Misc.Exception
 * Performance improve
 * Added primitives: `fitEx`, `unsafeSteady`, `unsafeExhaust`
 * Added: `condEvent`, `filterEvent`, `muted`
