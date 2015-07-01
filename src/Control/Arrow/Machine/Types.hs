@@ -97,6 +97,7 @@ import Data.Semigroup (Semigroup, (<>))
 import qualified Control.Monad.Trans.Free as F
 import qualified Control.Monad.Trans.Free.Church as F
 import Control.Arrow.Machine.ArrowUtil
+import GHC.Exts (build)
 
 
 -- | To get multiple outputs by one input, the `Phase` parameter is introduced.
@@ -1062,13 +1063,23 @@ runOn outpre pa0 = unArrowMonad $ \xs ->
 
 
 -- | Run a machine.
+newtype Builder a = Builder {
+    unBuilder :: forall b. (a -> b -> b) -> b -> b
+  }
+instance
+    Monoid (Builder a)
+  where
+    mempty = Builder $ \_ e -> e
+    Builder g `mappend` Builder f =
+        Builder $ \c e -> g c (f c e)
+
 run :: 
     ArrowApply a => 
     ProcessA a (Event b) (Event c) -> 
     a [b] [c]
 run pa = 
-    runOn (\x -> Endo (x:)) pa >>>
-    arr (appEndo `flip` [])
+    runOn (\x -> Builder $ \c e -> c x e) pa >>>
+    arr (\b -> build (unBuilder b))
 
 -- | Run a machine discarding all results.
 run_ :: 
