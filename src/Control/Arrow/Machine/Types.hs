@@ -675,21 +675,20 @@ rSwitch ::
     ArrowApply a => ProcessA a b c -> 
     ProcessA a (b, Event (ProcessA a b c)) c
 
-rSwitch cur = ProcessA $ proc (ph, (x, eva)) -> 
-  do
-    let now = evMaybePh cur id (ph, eva)
-    (ph', y, new) <-  step now -<< (ph, x)
-    returnA -< (ph', y, rSwitch new)
+rSwitch p = rSwitch' (p *** Cat.id) >>> arr fst
+  where
+    rSwitch' pid = kSwitch pid test $ \_ p' -> rSwitch'' (p' *** Cat.id)
+    rSwitch'' pid = dkSwitch pid test $ \s _ -> rSwitch' s
+    test = proc (_, (_, r)) -> returnA -< r
 
 
 drSwitch :: 
     ArrowApply a => ProcessA a b c -> 
     ProcessA a (b, Event (ProcessA a b c)) c
 
-drSwitch cur = ProcessA $ proc (ph, (x, eva)) -> 
-  do
-    (ph', y, new) <- step cur -< (ph, x)
-    returnA -< (ph', y, drSwitch (evMaybePh new id (ph, eva)))
+drSwitch p =  drSwitch' (p *** Cat.id)
+  where
+    drSwitch' pid = dSwitch pid $ \p' -> drSwitch' (p' *** Cat.id)
 
 kSwitch ::
     ArrowApply a => 
