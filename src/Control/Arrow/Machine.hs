@@ -41,7 +41,7 @@ import Control.Arrow.Machine.Utils
 --
 -- Here is an example that is a simple iteration over a list.
 --
--- \>\>\> run (evMap (+1)) [1, 2, 3]
+-- >>> run (evMap (+1)) [1, 2, 3]
 -- [2, 3, 4]
 --
 -- In above statement, "`evMap` (+1)" has a type "ProcessA (-\>) (Event Int) (Event Int)",
@@ -57,7 +57,7 @@ import Control.Arrow.Machine.Utils
 --
 -- ProcessA can run the effects as following.
 --
--- \>\>\> runKleisli (run_ $ anytime (Kleisli print)) [1, 2, 3]
+-- >>> runKleisli (run_ $ anytime (Kleisli print)) [1, 2, 3]
 -- 1
 -- 2
 -- 3
@@ -99,7 +99,7 @@ import Control.Arrow.Machine.Utils
 --     lift $ putStrLn x
 -- @
 --
--- \>\>\> runKleisli (run_ $ source \>\>\> pipe \>\>\> sink) (repeat ())
+-- >>> runKleisli (run_ $ source \>\>\> pipe \>\>\> sink) (repeat ())
 --
 -- The above code reads two lines from stdin, puts a concatenated line to stdout and finishes.
 --
@@ -146,7 +146,7 @@ import Control.Arrow.Machine.Utils
 --     anytime $ Kleisli (putStrLn . ("Even: " ++)) -\< show \<$\> evens
 -- @
 --
--- \>\>\> P.runKleisli (run f) [1..10]
+-- >>> P.runKleisli (run f) [1..10]
 -- Odd: 1
 -- Even: 2
 -- Odd: 3
@@ -194,7 +194,7 @@ import Control.Arrow.Machine.Utils
 --      returnA -\< y \<$ x
 -- @
 --
--- \>\>\> run f [1, 2, 3]
+-- >>> run f [1, 2, 3]
 -- [1, 3, 6]
 --
 -- `(\<$)` operator discards the value of rhs and only uses that's container structure
@@ -261,7 +261,7 @@ import Control.Arrow.Machine.Utils
 -- dHold i = proc x -\> drSwitch (pure i) -\< ((), pure \<$\> x)
 -- @
 --
--- \>\>\> run f [1]
+-- >>> run f [1]
 -- [0, 1, 1, 1]
 --
 -- This is because of machinecell's execution strategy.
