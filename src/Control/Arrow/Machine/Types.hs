@@ -410,17 +410,6 @@ class
     end :: a
 
 
-isNoEvent :: Occasional' a => a -> Bool
-isNoEvent = collapse >>> \case { NoEvent -> True; _ -> False }
-
-isEnd :: Occasional' a => a -> Bool
-isEnd = collapse >>> \case { End -> True; _ -> False }
-
-{-
-isOccasion :: Occasional' a => a -> Bool
-isOccasion = collapse >>> \case { Event () -> True; _ -> False }
--}
-
 instance
     (Occasional' a, Occasional' b) => Occasional' (a, b)
   where
@@ -511,7 +500,7 @@ yield :: o -> Plan i o ()
 yield x = F.liftF $ YieldPF x ()
 
 await :: Plan i o i
-await = F.FT $ \pure free -> free (AwaitPF pure (free StopPF))
+await = F.FT $ \pure free -> free id (AwaitPF pure (free pure StopPF))
 
 stop :: Plan i o a
 stop = F.liftF $ StopPF
@@ -548,53 +537,52 @@ constructT :: (Monad m, ArrowApply a) =>
               PlanT i o m r -> 
               ProcessA a (Event i) (Event o)
 
-constructT fit0 pl = ProcessA $ fit' $ F.runFT pl pure free
+constructT fit0 pl0 = ProcessA $ stepOf fit0 $ F.runFT pl0 pure (free fit0)
   where
-    fit' ma = proc arg -> do { (evx, pa) <- fit0 ma -< (); modFit evx pa -<< arg }
-    
-    modFit :: ArrowApply a => Event c -> StepType a b (Event c) -> StepType a b (Event c)
-    modFit (Event x) stp = retArrow Feed (Event x) (ProcessA stp)
-    modFit End stp = retArrow Feed End (ProcessA stp)
-    modFit _ stp = stp
-
-    retArrow ph' evx cont = arr $ \(ph, _) -> 
+    stepOf fit' ma = proc arg ->
+      do
+        (evy, stp) <- fit' ma -< ()
+        prependStep evy stp -<< arg
+      
+    prependStep (Event y) stp = arr $ \(ph, _) -> 
         case ph of
           Suspend -> 
-              (ph `mappend` Suspend,
-               if isEnd evx then End else NoEvent,
-               ProcessA $ retArrow ph' evx cont)
+              (Suspend, NoEvent, ProcessA $ prependStep (Event y) stp)
           _ -> 
-              (ph `mappend` ph', evx, cont)
+              (ph `mappend` Feed, Event y, ProcessA stp)
+    prependStep End _ = step stopped
+    prependStep NoEvent stp = stp
 
-    pure _ = return $ (End, retArrow Suspend End stopped)
-
-    free (AwaitPF f ff) =
+    stepOfAw fit' fma = proc arg@(ph, _) ->
       do
-        return $ (NoEvent, arr (uncurry (awaitIt f ff)) >>> proc pc -> pc -<< ())
+        (evy, stp) <- fit' $ go arg -<< ()
+        returnA -< (ph `mappend` Suspend, evy, ProcessA stp)
+      where
+        go (Feed, evx) = fma evx
+        go _ = return (NoEvent, stepOfAw fit' fma)
 
-    free (YieldPF y fc) = return $ (Event y, fit' fc)
+    pure _ =
+        return $ (End, step stopped)
 
-    free StopPF = return $ (End, retArrow Suspend End stopped)
-
-
-    awaitIt f _ Feed (Event x) = proc _ ->
+    free ::
+        (ArrowApply a, Monad m) =>
+        (forall t. m t -> a () t) ->
+        (x -> m (Event o, StepType a (Event i) (Event o)))
+        -> PlanF i o x -> m (Event o, StepType a (Event i) (Event o))
+    free fit' r pl@(AwaitPF f ff) =
       do
-        (evy, stp) <- fit0 (f x) -< ()
-        returnA -< (Feed, evy, ProcessA stp)
+        return $ (NoEvent, stepOfAw fit' fma)
+      where
+        fma (Event x) = r (f x)
+        fma NoEvent = free fit' r pl
+        fma End = r ff
 
-    awaitIt _ ff Feed End = proc _ ->
-      do
-        (evy, stp) <- fit0 ff -< ()
-        returnA -< (Feed, evy, ProcessA stp)
+    free fit' r (YieldPF y fc) =
+        return $ (Event y, stepOf fit' (r fc))
 
-    awaitIt _ ff Sweep End = proc _ ->
-      do
-        (evy, stp) <- fit0 ff -< ()
-        returnA -< (if not $ isNoEvent evy then Feed else Suspend, evy, ProcessA stp)
+    free _ _ StopPF =
+        return $ (End, step stopped)
 
-    awaitIt f ff ph _ = proc _ ->
-        returnA -< (ph `mappend` Suspend, NoEvent, 
-                    ProcessA $ arr (uncurry (awaitIt f ff)) >>> proc pc -> pc -<< ())
 
 
 repeatedlyT :: (Monad m, ArrowApply a) => 
@@ -702,9 +690,13 @@ kSwitch sf test k = ProcessA $ proc (ph, x) ->
     (ph', y, sf') <- step sf -< (ph, x)
     (phT, evt, test') <- step test -< (ph', (x, y))
 
+    let
+        nextA t = k sf' t
+        nextB = kSwitch sf' test' k
+
     evMaybePh 
-        (arr $ const (phT, y, kSwitch sf' test' k)) 
-        (step . (k sf'))
+        (arr $ const (phT, y, nextB)) 
+        (step . nextA)
         (phT, evt)
             -<< (phT, x)
 
@@ -792,7 +784,7 @@ pSwitch r sfs test k = ProcessA $ proc (ph, x) ->
     (phT, evt, test') <- step test -< (ph', (x, zs))
 
     evMaybePh
-        (arr $ const (ph' `mappend` phT, zs, pSwitch r sfs' test' k))
+        (arr $ const (phT, zs, pSwitch r sfs' test' k))
         (step . (k sfs') )
         (phT, evt)
             -<< (ph, x)
