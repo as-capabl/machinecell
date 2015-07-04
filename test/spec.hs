@@ -340,18 +340,22 @@ plans = describe "Plan" $
             result = run (repeatedly pl) l
         result `shouldBe` [2, 3, 5, 6, 10, 11, 20, 21, 100, 101]
 
-    it "can handle the end with catch." $
+    it "can handle the end with catchP." $
       do
-        let pl2 =
+        let
+            plCatch =
               do
                 x <- await `catchP` (yield 1 >> stop)
                 yield x
-                y <- await 
+                y <- (yield 2 >> await >> yield 3 >> await) `catchP` (yield 4 >> return 5)
                 yield y
-
-        run (construct pl2) [] `shouldBe` [1]
-        run (construct pl2) [3] `shouldBe` [3]
-        run (construct pl2) [3, 2] `shouldBe` [3, 2]
+                y <- (await >>= yield >> stop) `catchP` (yield 6 >> return 7)
+                yield y
+        run (construct plCatch) [] `shouldBe` [1]
+        run (construct plCatch) [100] `shouldBe` [100, 2, 4, 5, 6, 7]
+        run (construct plCatch) [100, 200] `shouldBe` [100, 2, 3, 4, 5, 6, 7]
+        run (construct plCatch) [100, 200, 300] `shouldBe` [100, 2, 3, 300, 6, 7]
+        run (construct plCatch) [100, 200, 300, 400] `shouldBe` [100, 2, 3, 300, 400, 6, 7]
 
 utility =
   do

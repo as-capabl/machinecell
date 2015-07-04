@@ -509,25 +509,31 @@ stop = F.liftF $ StopPF
 catchP:: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
 
-catchP pl cont = 
-    F.toFT $ catch' (F.fromFT pl) (F.fromFT cont)
-
-catch' ::
-    Monad m =>
-    F.FreeT (PlanF t o) m a ->
-    F.FreeT (PlanF t o) m a ->
-    F.FreeT (PlanF t o) m a
-
-catch' (F.FreeT mf) cont@(F.FreeT mcont) = 
-    F.FreeT $ mf >>= go
+catchP pl cont0 = 
+    F.FT $ \pure free ->
+        F.runFT
+            pl
+            (pure' pure)
+            (free' cont0 pure free)
   where
-    go (F.Pure a) = return $ F.Pure a
-    go (F.Free StopPF) = mcont
-    go (F.Free (AwaitPF f ff)) = 
-        return $ F.Free $ 
-        AwaitPF (\i -> f i `catch'` cont) (ff `catch'` cont)
-    go (F.Free fft) = 
-        return $ F.Free $ (`catch'` cont) <$> fft
+    pure' pure = pure
+
+    free' ::
+        Monad m =>
+        PlanT i o m a ->
+        (a -> m r) ->
+        (forall x. (x -> m r) -> PlanF i o x -> m r) ->
+        (y -> m r) ->
+        (PlanF i o y) ->
+        m r
+    free' cont pure free _ StopPF =
+        F.runFT cont pure free
+    free' cont pure free r (AwaitPF f ff) =
+        free
+            (either (\_ -> F.runFT cont pure free) r)
+            (AwaitPF (Right . f) (Left ff))
+    free' _ _ free r pf =
+        free r pf
 
 
 
@@ -549,16 +555,18 @@ constructT fit0 pl0 = ProcessA $ stepOf fit0 $ F.runFT pl0 pure (free fit0)
           Suspend -> 
               (Suspend, NoEvent, ProcessA $ prependStep (Event y) stp)
           _ -> 
-              (ph `mappend` Feed, Event y, ProcessA stp)
+              (Feed, Event y, ProcessA stp)
     prependStep End _ = step stopped
     prependStep NoEvent stp = stp
 
     stepOfAw fit' fma = proc arg@(ph, _) ->
       do
         (evy, stp) <- fit' $ go arg -<< ()
-        returnA -< (ph `mappend` Suspend, evy, ProcessA stp)
+        let ph' = case evy of {NoEvent -> Suspend; _ -> Feed}
+        returnA -< (ph `mappend` ph', evy, ProcessA stp)
       where
         go (Feed, evx) = fma evx
+        go (Sweep, End) = fma End
         go _ = return (NoEvent, stepOfAw fit' fma)
 
     pure _ =
@@ -900,7 +908,7 @@ while_ cond body =
 -- | Monoid wrapper
 data WithEnd r = WithEnd { 
     getRWE :: r,
-    getContWE :: Bool
+    getContWE :: !Bool
   }
 
 instance
@@ -1026,34 +1034,38 @@ sweepAll outpre =
 
 -- | Run a machine with results concatenated in terms of a monoid.
 runOn ::
-    (ArrowApply a, Monoid r) =>
+    (ArrowApply a, Monoid r, Fd.Foldable f) =>
     (c -> r) ->
     ProcessA a (Event b) (Event c) ->
-    a [b] r
+    a (f b) r
 runOn outpre pa0 = unArrowMonad $ \xs ->
   do
     wer <- runRM arrowMonad pa0 $ execWriterT $ 
       do
-        go xs
+        -- Sweep initial events.
+        (_, wer) <- listen $ sweepAll outpre
+
+        -- Feed inputs.
+        if getContWE wer
+          then
+            Fd.foldr feedSweep (return ()) xs
+          else
+            return ()
+
+        -- Terminate.
         _ <- lift (feed_ End End)
         sweepAll outpre
     return $ getRWE wer
 
   where
-    go xs =
-      do
-        (_, wer) <- listen $ sweepAll outpre
-        if getContWE wer then cont xs else return ()
-
-    cont [] = return ()
-
-    cont (x:xs) =
+    feedSweep x cont =
       do
         _ <- lift $ feed x
-        go xs
+        ((), wer) <- listen $ sweepAll outpre
+        if getContWE wer then cont else return ()
+      
 
 
--- | Run a machine.
 newtype Builder a = Builder {
     unBuilder :: forall b. (a -> b -> b) -> b -> b
   }
@@ -1064,6 +1076,7 @@ instance
     Builder g `mappend` Builder f =
         Builder $ \c e -> g c (f c e)
 
+-- | Run a machine.
 run :: 
     ArrowApply a => 
     ProcessA a (Event b) (Event c) -> 
