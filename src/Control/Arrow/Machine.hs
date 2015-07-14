@@ -99,7 +99,7 @@ import Control.Arrow.Machine.Utils
 --     lift $ putStrLn x
 -- @
 --
--- >>> runKleisli (run_ $ source \>\>\> pipe \>\>\> sink) (repeat ())
+-- >>> runKleisli (run_ $ source >>> pipe >>> sink) (repeat ())
 --
 -- The above code reads two lines from stdin, puts a concatenated line to stdout and finishes.
 --

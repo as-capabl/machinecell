@@ -19,6 +19,8 @@ description:
 	.
 	Arrow combinatins are supported and can be used with the arrow notation.
 	AFRP-like utilities are also available.
+	.
+	A quick introduction is available in the Control.Arrow.Machine documentation.
 
 library
   exposed-modules:
