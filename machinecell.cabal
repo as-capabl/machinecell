@@ -1,5 +1,5 @@
 name:                machinecell
-version:             2.0.1
+version:             2.1.0
 synopsis:            Arrow based stream transducers
 license:             BSD3
 license-file:        LICENSE
@@ -53,4 +53,4 @@ source-repository head
 source-repository this
   type:		git
   location:	https://github.com/as-capabl/machinecell.git
-  tag:		release-2.0.1
+  tag:		release-2.1.0

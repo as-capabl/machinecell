@@ -173,7 +173,7 @@ instance
     input = proc evx ->
       do
         -- 一個前の値で分岐してみる
-        b <- cycleDelay <<< hold True -< 
+        b <- dHold True -< 
                (\x -> x `mod` 2 == 0) <$> evx
 
         if b

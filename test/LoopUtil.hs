@@ -18,6 +18,23 @@ doubler = arr (fmap $ \x -> [x, x]) >>> P.fork
 
 loopUtil =
   do
+    describe "loop" $
+      do
+        it "is possible that value by `dHold` or `dAccum` can refer at upstream." $
+          do
+            let 
+                pa :: ProcessA (Kleisli IO) (Event Int) (Event Int)
+                pa = proc evx ->
+                  do
+                    rec
+                        anytime (Kleisli print) -< y <$ evx
+                        anytime (Kleisli putStr) -< "" <$ evx -- side effect
+                        evx2 <- doubler -< evx
+                        y <- P.dAccum 0 -< (+) <$> evx2
+                    returnA -< y <$ evx
+            ret <- liftIO $ runKleisli (P.run pa) [1, 2, 3]
+            ret `shouldBe` [0, 1+1, 1+1+2+2]
+  
     describe "cycleDelay" $
       do
         it "can refer a recent value at downstream." $

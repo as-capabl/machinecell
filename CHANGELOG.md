@@ -1,4 +1,16 @@
 
+2.1.0
+-----------
+* Added `dHold`, `dAccum`.
+* Deprecated `cycleDelay`.
+* Fixed `muted`.
+* Slightly changed the ArrowLoop instance declaration.
+    * Right tightening rule will be preserved.
+    * For IO processes, "Indefinite access to MVar" errors, which used to occur in some
+      situations in old versions, will be suppressed.
+    * This will not change any existing code unless it loops back
+      any Event-type signal.
+
 2.0.1
 ------------
 * Support free-4.12

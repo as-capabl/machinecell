@@ -230,19 +230,6 @@ loops =
             in
               take 3 (result!!1) `shouldBe` [5, 5, 5]
 
-{-
-        it "can be used with rec statement(macninery)" $
-          let
-              mc = anytime Cat.id
-              a = proc x ->
-                do
-                  rec l <- mc -< (:l') <$> x
-                      l' <- returnA -< fromEvent [] l
-                  returnA -< l
-              result = fst $ stateProc a [2, 5]
-            in
-              take 3 (result!!1) `shouldBe` [5, 5, 5]
-
         it "the last value is valid." $
           do
             let
@@ -254,10 +241,20 @@ loops =
                 pa = proc x ->
                   do
                     rec y <- mc -< (+z) <$> x
-                        z <- hold 0 <<< delay -< y
+                        z <- dHold 0 -< y
                     returnA -< y
             run pa [1, 10] `shouldBe` [1, 2, 12, 24]
--}
+
+        it "carries no events to upstream." $
+          do
+            let
+                pa = proc ev ->
+                  do
+                    rec r <- dHold True -< False <$ ev2
+                        ev2 <- fork -< [(), ()] <$ ev
+                    returnA -< r <$ ev
+            run pa [1, 2, 3] `shouldBe` [True, True, True] 
+
 
     describe "Rules for ArrowLoop" $
       do
@@ -274,9 +271,6 @@ loops =
             in
               (loop (first f >>> apure)) `equiv` (f >>> loop apure)
 
-        it "right tigntening"
-           pending
-{-
         prop "right tightening" $ \fx cond ->
           let
               f = mkProc fx
@@ -284,7 +278,7 @@ loops =
               equiv = mkEquivTest cond
             in
               (loop (apure >>> first f)) `equiv` (loop apure >>> f)
--}
+
 
 choice =
   do

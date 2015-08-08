@@ -10,7 +10,9 @@ module
       (
         -- * AFRP-like utilities
         hold,
+        dHold,
         accum,
+        dAccum,
         edge,
         passRecent,
         withRecent,
@@ -73,22 +75,25 @@ import Control.Arrow.Machine.Types
 
 hold :: 
     ArrowApply a => b -> ProcessA a (Event b) b
-{-
-hold old = ProcessA $ proc (ph, evx) ->
-  do
-    let new = fromEvent old evx
-    returnA -< (ph `mappend` Suspend, new, hold new)
--}
 hold old = proc evx -> 
   do
     rSwitch (pure old) -< ((), pure <$> evx)
+
+dHold :: 
+    ArrowApply a => b -> ProcessA a (Event b) b
+dHold old = proc evx -> 
+  do
+    drSwitch (pure old) -< ((), pure <$> evx)
 
 accum ::
     ArrowApply a => b -> ProcessA a (Event (b->b)) b
 accum x = switch (pure x &&& arr (($x)<$>)) accum'
   where
     accum' y = dSwitch (pure y &&& Cat.id) (const (accum y))
-  
+
+dAccum ::
+    ArrowApply a => b -> ProcessA a (Event (b->b)) b
+dAccum x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 
 edge :: 
     (ArrowApply a, Eq b) =>
@@ -292,6 +297,8 @@ onEnd = arr collapse >>> go
     
 -- |Observe a previous value of a signal.
 -- Tipically used with rec statement.
+
+{-# DEPRECATED cycleDelay "Simply use `dHold` or `dAccum`" #-}
 cycleDelay ::
     ArrowApply a => ProcessA a b b
 cycleDelay =
@@ -312,4 +319,5 @@ cycleDelay =
 
     appStore (Just x) = (proc _ -> store -< (Just x, Nothing), ())
     appStore _ = (Cat.id, ())
+    
     

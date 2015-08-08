@@ -248,13 +248,13 @@ import Control.Arrow.Machine.Utils
 -- Although `ProcessA` is an instance of `ArrowLoop`,
 -- to send values to upstream, there is a little difficulties.
 -- 
--- In example below, result is [0, 1, 1, 1], not [0, 1, 2, 3].
+-- In example below, result is [0, 0, 0, 0], not [1, 2, 3, 4].
 --
 -- @
 -- f = proc x -\>
 --   do
 --     rec
---         b \<- dHold 0 -\< y
+--         b \<- hold 0 -\< y
 --         y \<- fork -\< (\xx -\> [xx, xx+1, xx+2, xx+3]) \<$\> x
 --     returnA -\< b \<$ y
 --
@@ -262,20 +262,13 @@ import Control.Arrow.Machine.Utils
 -- @
 --
 -- >>> run f [1]
--- [0, 1, 1, 1]
+-- [0, 0, 0, 0]
 --
--- This is because of machinecell's execution strategy.
--- It's much similar to Prolog's backtracking stategy.
--- At the time backtracking reaches `fork` three values are
--- found and backtracking go and back three times between fork and returnA,
--- but not reaches to dHold until all outputs are done.
+-- In general, `Event` values refered at upstream in rec statements are
+-- almost always `NoEvent`s.
 --
--- In general, `Event` values should not be refered at upstream.
---
--- Rather, they should be encoded to behaviours and send to upstream in
--- rec statement and delayed by `cycleDelay`.
---
--- Another way to send values to upstream is `encloseState`.
+-- A better way to send events to upstream is, to encode them to behaviours using `dHold`,
+-- `dAccum`, and so on, then send to upstream in rec statement.
 --
 -- = Unsafe primitives
 --

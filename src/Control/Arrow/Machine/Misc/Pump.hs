@@ -47,7 +47,7 @@ intake = proc (ev, clock) ->
   do
     cl2 <- oneMore -< clock
     append <- returnA -< (\x y -> y `mappend` Endo (x:)) <$> ev
-    e <- P.accum (Endo id) <<< P.gather -< [ (const $ Endo id) <$ cl2, append ]
+    e <- P.dAccum (Endo id) <<< P.gather -< [ (const $ Endo id) <$ cl2, append ]
     returnA -< Duct e
 
 outlet ::
@@ -56,6 +56,5 @@ outlet ::
 outlet = proc (~(Duct dct), clock) ->
   do
     cl2 <- oneMore -< clock
-    dct' <- P.cycleDelay -< dct
-    P.fork -< appEndo dct' [] <$ cl2
+    P.fork -< appEndo dct [] <$ cl2
 

@@ -333,12 +333,16 @@ instance
 instance
     (ArrowApply a, ArrowLoop a) => ArrowLoop (ProcessA a)
   where
-    loop = fitEx (\f -> loop (lp f))
+    loop pa = ProcessA $ proc (ph, x) ->
+      do
+        (_, d) <- loop suspended -< x
+        (ph', (y, _), pa') <- step pa -< (ph, (x, d))
+        returnA -< (ph', y, loop pa')
       where
-        lp f = proc ((p, x), d) ->
+        suspended = proc (x, d) ->
           do
-            (q, (y, d')) <- f -< (p, (x, d))
-            returnA -< ((q, y), d')
+            (_, (y, d'), _) <- step pa -< (Suspend, (x, d))
+            returnA -< ((y, d'), d')
 
 
 instance
@@ -477,7 +481,8 @@ muted ::
     (ArrowApply a, Occasional' b, Occasional c) => ProcessA a b c
 muted = proc x ->
   do
-    rSwitch (arr $ const noEvent) -< ((), stopped <$ collapse x)
+    ed <- repeatedly $ await `catchP` yield () -< collapse x
+    rSwitch (arr $ const noEvent) -< ((), stopped <$ ed)
 
 
 
