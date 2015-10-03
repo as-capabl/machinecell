@@ -27,7 +27,7 @@ import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import RandomProc
 import LoopUtil
 runKI a x = runIdentity (runKleisli a x)
-
+swap ~(x, y) = (y, x)
 
 
 main = hspec $ 
@@ -353,13 +353,6 @@ plans = describe "Plan" $
 
 utility =
   do
-    describe "edge" $
-      do
-        it "detects edges of input behaviour" $
-          do
-            run (hold 0 >>> edge) [1, 1, 2, 2, 2, 3] `shouldBe` [0, 1, 2, 3]
-            run (hold 0 >>> edge) [0, 1, 1, 2, 2, 2, 3] `shouldBe` [0, 1, 2, 3]
-
     describe "accum" $
       do
         it "acts like fold." $
@@ -384,6 +377,24 @@ utility =
                     returnA -< x <$ ed
             run pa [1..4] `shouldBe` [4]
 
+        it "cleans up all decendant events." $
+          do
+            let
+                pa :: ProcessA (Kleisli IO) (Event Int) (Event Int)
+{-                pa = proc evx ->
+                  do
+                    ed <- P.onEnd -< evx
+
+                    evOut <- P.fork -< replicate 2 <$> ed
+                    _ <- P.fork -< replicate 2 <$> ed
+
+                    returnA -< 0 <$ evOut-}
+                pa = P.onEnd >>> arr (\x -> (replicate 2 <$> x, replicate 2 <$> x)) >>>
+                    first P.fork >>> arr id >>> second P.fork >>> arr (\(ev, _) -> 0 <$ ev)
+
+            ret <- liftIO $ runKleisli (P.run pa) []
+            ret `shouldBe` [0, 0]
+  
     describe "gather" $
       do
         it "correctly handles the end" $

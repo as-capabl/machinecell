@@ -13,7 +13,7 @@ module
         dHold,
         accum,
         dAccum,
-        edge,
+        --edge,
         passRecent,
         withRecent,
 
@@ -27,14 +27,10 @@ module
         drSwitch,
         kSwitch,
         dkSwitch,
-        pSwitch,
-        pSwitchB,
-        rpSwitch,
-        rpSwitchB,
-
-        -- * State arrow
-        peekState,
-        encloseState,
+        --pSwitch,
+        --pSwitchB,
+        --rpSwitch,
+        --rpSwitchB,
 
         -- * Other utility arrows
         tee,
@@ -45,11 +41,10 @@ module
         filter,
         echo,
         anytime,
-        par,
-        parB,
+        --par,
+        --parB,
         now,
-        onEnd,
-        cycleDelay
+        onEnd
        )
 where
 
@@ -95,24 +90,13 @@ dAccum ::
     ArrowApply a => b -> ProcessA a (Event (b->b)) b
 dAccum x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 
+{-
 edge :: 
     (ArrowApply a, Eq b) =>
     ProcessA a b (Event b)
 
-edge = encloseState (unsafeExhaust impl) Nothing
-  where
-    impl ::
-        (ArrowApply a, Eq b) =>
-        StateArrow (Maybe b) a b (Maybe b)
-    impl = proc x ->
-      do
-        mprv <- fetch -< ()
-        store -< Just x
-        returnA -<
-            case mprv
-              of
-                Just prv -> if prv == x then Nothing else Just x
-                Nothing -> Just x
+edge = 
+-}
 
 {-# DEPRECATED passRecent, withRecent "Use `hold` instead" #-}
 infixr 9 `passRecent`
@@ -143,36 +127,6 @@ withRecent af = proc (e, asevx) ->
       _ -> returnA -< noEvent
 
 
-
-
-
-
---
--- State arrow
---
-peekState ::
-    (ArrowApply a, ArrowState s a) =>
-    ProcessA a e s
-peekState = unsafeSteady fetch
-
--- Should be exported?
-exposeState ::
-    (ArrowApply a, ArrowApply a', ArrowAddState s a a') =>
-    ProcessA a b c ->
-    ProcessA a' (b, s) (c, s)
-exposeState = fitEx es
-  where
-    es f = proc (p, (x, s)) ->
-      do
-        ((q, y), s') <- elimState f -< ((p, x), s)
-        returnA -< (q, (y, s'))
-
-encloseState ::
-    (ArrowApply a, ArrowApply a', ArrowAddState s a a') =>
-    ProcessA a b c ->
-    s ->
-    ProcessA a' b c
-encloseState pa s = loop' s (exposeState pa)
 
 --
 -- other utility arrow
@@ -294,30 +248,4 @@ onEnd = arr collapse >>> go
   where
     go = repeatedly $
         await `catchP` (yield () >> stop)
-    
--- |Observe a previous value of a signal.
--- Tipically used with rec statement.
-
-{-# DEPRECATED cycleDelay "Simply use `dHold` or `dAccum`" #-}
-cycleDelay ::
-    ArrowApply a => ProcessA a b b
-cycleDelay =
-    encloseState impl (Nothing, Nothing)
-  where
-    impl :: ArrowApply a => ProcessA (StateArrow (Maybe b, Maybe b) a) b b
-    impl = proc x ->
-      do
-        -- Load stored value when backtracking reaches here.
-        (_, stored) <- peekState -< ()
-        unsafeExhaust (app >>> arr (const Nothing)) -< appStore stored
-
-        -- Repeat current value.
-        (current, _) <- peekState -< ()
-        let x0 = fromMaybe x current
-        unsafeSteady store -< (Just x0, Just x)
-        returnA -< x0
-
-    appStore (Just x) = (proc _ -> store -< (Just x, Nothing), ())
-    appStore _ = (Cat.id, ())
-    
     

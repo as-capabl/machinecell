@@ -2,12 +2,13 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module
     Control.Arrow.Machine.Types
@@ -61,21 +62,18 @@ module
         drSwitch,
         kSwitch,
         dkSwitch,
-        pSwitch,
-        pSwitchB,
-        rpSwitch,
-        rpSwitchB,
-        par,
-        parB,
+        --pSwitch,
+        --pSwitchB,
+        --rpSwitch,
+        --rpSwitchB,
+        --par,
+        --parB,
 
         
         -- * Primitive machines - other safe primitives
         fit,
-        loop',
         
         -- * Primitive machines - unsafe
-        fitEx,
-        unsafeSteady,
         unsafeExhaust,
       )
 where
@@ -94,6 +92,7 @@ import qualified Control.Applicative as Ap
 import Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup, (<>))
+import Data.Maybe (fromMaybe, isNothing, isJust)
 import qualified Control.Monad.Trans.Free as F
 import qualified Control.Monad.Trans.Free.Church as F
 import Control.Arrow.Machine.ArrowUtil
@@ -117,57 +116,53 @@ instance
     mappend Sweep Sweep = Sweep
 
 
-type StepType a b c = a (Phase, b) (Phase, c, ProcessA a b c) 
+type ProcType a b c = ProcessA a b c
+
+step = id
 
 -- | The stream transducer arrow.
 --
 -- To construct `ProcessA` instances, use `Control.Arrow.Machine.Plan.Plan`,
 -- `arr`, functions declared in `Control.Arrow.Machine.Utils`,
 -- or arrow combinations of them.
-newtype ProcessA a b c = ProcessA { 
-      step :: StepType a b c
-    }
+data ProcessA a b c = ProcessA {
+    feed :: a b (c, ProcessA a b c),
+    sweep :: a b (Maybe c, ProcessA a b c),
+    suspend :: b -> c
+  }
 
-
-fitEx :: (Arrow a, Arrow a') =>
-    (forall p q. a (p, b) (q, c) -> a' (p, b') (q, c')) ->
-    ProcessA a b c ->
-    ProcessA a' b' c'
-fitEx f k = ProcessA $ proc (ph, x) ->
-  do
-    ((ph', k'), y) <- f (step k >>> arr (\(ph', y, k') -> ((ph', k'), y))) -< (ph, x)
-    returnA -< (ph', y, fitEx f k')
 
 
 fit :: (Arrow a, Arrow a') => 
        (forall p q. a p q -> a' p q) -> 
        ProcessA a b c -> ProcessA a' b c
-fit f = fitEx f
+fit f (ProcessA {..})  = ProcessA
+  {
+    feed = f (feed >>> second (arr $ fit f)),
+    sweep = f (sweep >>> second (arr $ fit f)),
+    suspend = suspend
+  }
 
 
-loop' :: ArrowApply a =>
-    d ->
-    ProcessA a (b, d) (c, d) ->
-    ProcessA a b c
-loop' i pa = ProcessA $ proc (ph, x) ->
-  do
-    (ph', (y, n), pa') <- step pa -< (ph, (x, i))
-    returnA -< (ph', y, loop' n pa')
 
 instance
     Arrow a => Profunctor (ProcessA a)
   where
-    dimap f g pa = ProcessA $ dimapStep f g (step pa)
+    dimap f g pa = dimapProc f g (step pa)
     {-# INLINE dimap #-}
 
-dimapStep :: Arrow a => 
+dimapProc :: Arrow a => 
              (b->c)->(d->e)->
-             StepType a c d -> StepType a b e
-dimapStep f g stp = proc (ph, x) ->
-  do
-    (ph', y, pa') <- stp -< (ph, f x)
-    returnA -< (ph', g y, dimap f g pa')
-{-# NOINLINE dimapStep #-}
+             ProcType a c d -> ProcType a b e
+dimapProc f g (ProcessA {..}) = ProcessA 
+  {
+    feed = arr f >>> feed >>> (arr g *** arr (dimapProc f g)) ,
+    sweep = arr f >>> sweep >>> (arr (fmap g) *** arr (dimapProc f g)),
+    suspend = dimap f g suspend
+  }
+
+{-# NOINLINE dimapProc #-}
+
 
 instance
     Arrow a => Functor (ProcessA a i)
@@ -180,200 +175,198 @@ instance
     pure = arr . const
     pf <*> px = (pf &&& px) >>> arr (uncurry ($))
 
-      
+
 instance
     ArrowApply a => Cat.Category (ProcessA a)
   where
-    id = ProcessA idStep
+    id = idProc
     {-# INLINE id #-}
-    g . f = ProcessA $ compositeStep (step f) (step g)
+    g . f = compositeProc (step f) (step g)
     {-# INLINE (.) #-}
 
 
 instance 
     ArrowApply a => Arrow (ProcessA a)
   where
-    arr = ProcessA . arrStep
+    arr = arrProc
     {-# INLINE arr #-}
 
-    first pa = ProcessA $ parStep (step pa) idStep
+    first pa = parProc (step pa) idProc
     {-# INLINE first #-}
 
-    second pa = ProcessA $ parStep idStep (step pa)
+    second pa = parProc idProc (step pa)
     {-# INLINE second #-}
 
-    pa *** pb = ProcessA $ parStep (step pa) (step pb)
+    pa *** pb = parProc (step pa) (step pb)
     {-# INLINE (***) #-}
 
 
-parStep :: ArrowApply a =>
-    StepType a b c ->
-    StepType a d e ->
-    StepType a (b, d) (c, e)
-parStep f g = proc (ph, (x1, x2)) ->
-  do
-    (ph1, y1, pa') <- f -< (ph, x1)
-    (ph2, y2, pb') <- g -< (ph, x2)
-    returnA -< (ph1 `mappend` ph2, (y1, y2), pa' *** pb')
-{-# NOINLINE parStep #-}
+parProc :: ArrowApply a =>
+    ProcType a b c ->
+    ProcType a d e ->
+    ProcType a (b, d) (c, e)
+parProc f g = ProcessA {
+    feed = proc (x1, x2) ->
+      do
+        (y1, f') <- feed f -< x1
+        (y2, g') <- feed g -< x2
+        returnA -< ((y1, y2), parProc f' g'),
+    sweep = proc (x1, x2) ->
+      do
+        (my1, f') <- sweep f -< x1
+        (my2, g') <- sweep g -< x2
+        let y1 = fromMaybe (suspend f x1) my1
+            y2 = fromMaybe (suspend g x2) my2
+            r = if (isNothing my1 && isNothing my2) then Nothing else Just (y1, y2)
+        returnA -< (r, parProc f' g'),
+    suspend = suspend f *** suspend g
+  }
+{-# NOINLINE parProc #-}
 
-idStep :: ArrowApply a => StepType a b b
-idStep = proc (ph, x) ->
-    returnA -< (ph `mappend` Suspend, x, ProcessA $ idStep)
-{-# NOINLINE idStep #-}
+idProc :: ArrowApply a => ProcType a b b
+idProc = ProcessA {
+    feed = arr $ \x -> (x, idProc),
+    sweep = arr $ \_ -> (Nothing, idProc),
+    suspend = id
+  }
+{-# NOINLINE idProc #-}
 
-arrStep :: ArrowApply a => (b->c) -> StepType a b c
-arrStep f = proc (ph, x) ->
-    returnA -< (ph `mappend` Suspend, f x, ProcessA $ arrStep f)
-{-# NOINLINE arrStep #-}
-
+arrProc :: ArrowApply a => (b->c) -> ProcType a b c
+arrProc f =  ProcessA {
+    feed = arr $ \x -> (f x, arrProc f),
+    sweep = arr $ \_ -> (Nothing, arrProc f),
+    suspend = f
+  }
+{-# NOINLINE arrProc #-}
 
 -- |Composition is proceeded by the backtracking strategy.
-compositeStep :: ArrowApply a => 
-              StepType a b d -> StepType a d c -> StepType a b c
-compositeStep f g = proc (ph, x) -> compositeStep' ph f g -<< (ph, x)
-{-# NOINLINE compositeStep #-}
-
-compositeStep' :: ArrowApply a => 
-              Phase -> 
-              StepType a b d -> StepType a d c -> StepType a b c
-             
-compositeStep' Sweep f g = proc (_, x) ->
-  do
-    (_, r1, pa') <- f -< (Suspend, x)
-    (ph2, r2, pb') <- g -<< (Sweep, r1)
-    cont ph2 -<< (r2, pa', pb', x)
-  where
-    cont Feed = arr $ \(r, pa, pb, _) -> (Feed, r, pa >>> pb)
-    cont Sweep = arr $ \(r, pa, pb, _) -> (Sweep, r, pa >>> pb)
-    cont Suspend = proc (r, pa, pb, x) ->
+compositeProc :: ArrowApply a => 
+              ProcType a b d -> ProcType a d c -> ProcType a b c
+compositeProc f g = ProcessA {
+    feed = proc x ->
       do
-        (ph1, r1, pa') <- step pa -<< (Sweep, x)
-        (ph2, r2, pb') <-
-            (if ph1 == Feed
-                then
-                  step pb
-                else
-                  arr $ const (Suspend, r, pb))
-                      -<< (ph1, r1)
-        returnA -< (ph2, r2, pa' >>> pb')
+        (y, f') <- feed f -< x
+        (z, g') <- feed g -< y
+        returnA -< (z, compositeProc f' g'),
+    sweep = proc x ->
+      do
+        (mz, g') <- sweep g -< suspend f x
+        (case mz
+          of
+            Just z -> arr $ const (Just z, compositeProc f g')
+            Nothing -> btrk f g')
+                -<< x,
+    suspend = suspend f >>> suspend g
+  }
+  where
+    btrk f g = proc x ->
+      do
+        (my, f') <- sweep f -< x
+        (mz, g') <-
+            (case my
+              of
+                Just y -> proc () ->
+                  do
+                    (z, g') <- feed g -< y
+                    returnA -< (Just z, g')
+                Nothing -> proc () ->
+                  do
+                    returnA -< (Nothing, g))
+                -<< ()
+        returnA -< (mz, compositeProc f' g')
 
-compositeStep' ph f g = proc (_, x) ->
-  do
-    (ph1, r1, pa') <- f -< (ph, x)
-    (ph2, r2, pb') <- g -<< (ph1, r1)
-    returnA -< (ph2, r2, pa' >>> pb')
+{-# NOINLINE compositeProc #-}
 
 -- rules
 {-# RULES
 "ProcessA: id/*"
-    forall g. compositeStep idStep g = g
+    forall g. compositeProc idProc g = g
 "ProcessA: */id"
-    forall f. compositeStep f idStep = f
+    forall f. compositeProc f idProc = f
 
 "ProcessA: concat/concat" 
-    forall f g h. compositeStep (compositeStep f g) h = compositeStep f (compositeStep g h)
+    forall f g h. compositeProc (compositeProc f g) h = compositeProc f (compositeProc g h)
 
 "ProcessA: dimap/dimap"
-    forall f g h i j. dimapStep f j (dimapStep g i h)  = dimapStep (g . f) (j . i) h
+    forall f g h i j. dimapProc f j (dimapProc g i h)  = dimapProc (g . f) (j . i) h
 "ProcessA: dimap/arr"
-    forall f g h. dimapStep f h (arrStep g) = arrStep (h . g . f)
+    forall f g h. dimapProc f h (arrProc g) = arrProc (h . g . f)
 
 "ProcessA: arr***/par"
-    forall f1 f2 g1 g2 h. compositeStep (parStep f1 (arrStep f2)) (compositeStep (parStep g1 g2) h) =
-        compositeStep (parStep (compositeStep f1 g1) (dimapStep f2 id g2)) h
+    forall f1 f2 g1 g2 h. compositeProc (parProc f1 (arrProc f2)) (compositeProc (parProc g1 g2) h) =
+        compositeProc (parProc (compositeProc f1 g1) (dimapProc f2 id g2)) h
 "ProcessA: arr***/par-2"
-    forall f1 f2 g1 g2. compositeStep (parStep f1 (arrStep f2)) (parStep g1 g2) =
-        parStep (compositeStep f1 g1) (dimapStep f2 id g2)
+    forall f1 f2 g1 g2. compositeProc (parProc f1 (arrProc f2)) (parProc g1 g2) =
+        parProc (compositeProc f1 g1) (dimapProc f2 id g2)
 "ProcessA: par/***arr"
-    forall f1 f2 g1 g2 h. compositeStep (parStep f1 f2) (compositeStep (parStep (arrStep g1) g2) h) =
-        compositeStep (parStep (dimapStep id g1 f1) (compositeStep f2 g2)) h
+    forall f1 f2 g1 g2 h. compositeProc (parProc f1 f2) (compositeProc (parProc (arrProc g1) g2) h) =
+        compositeProc (parProc (dimapProc id g1 f1) (compositeProc f2 g2)) h
 "ProcessA: par/***arr-2"
-    forall f1 f2 g1 g2. compositeStep (parStep f1 f2) (parStep (arrStep g1) g2) =
-        parStep (dimapStep id g1 f1) (compositeStep f2 g2)
+    forall f1 f2 g1 g2. compositeProc (parProc f1 f2) (parProc (arrProc g1) g2) =
+        parProc (dimapProc id g1 f1) (compositeProc f2 g2)
 
 "ProcessA: first/par"
-    forall f1 g1 g2 h. compositeStep (parStep f1 idStep) (compositeStep (parStep g1 g2) h) =
-        compositeStep (parStep (compositeStep f1 g1) g2) h
+    forall f1 g1 g2 h. compositeProc (parProc f1 idProc) (compositeProc (parProc g1 g2) h) =
+        compositeProc (parProc (compositeProc f1 g1) g2) h
 "ProcessA: first/par-2"
-    forall f1 g1 g2. compositeStep (parStep f1 idStep) (parStep g1 g2) =
-        parStep (compositeStep f1 g1) g2
+    forall f1 g1 g2. compositeProc (parProc f1 idProc) (parProc g1 g2) =
+        parProc (compositeProc f1 g1) g2
 "ProcessA: par/second"
-    forall f1 f2 g2 h. compositeStep (parStep f1 f2) (compositeStep (parStep idStep g2) h) =
-        compositeStep (parStep f1 (compositeStep f2 g2)) h
+    forall f1 f2 g2 h. compositeProc (parProc f1 f2) (compositeProc (parProc idProc g2) h) =
+        compositeProc (parProc f1 (compositeProc f2 g2)) h
 "ProcessA: par/second-2"
-    forall f1 f2 g2. compositeStep (parStep f1 f2) (parStep idStep g2) =
-        parStep f1 (compositeStep f2 g2)
+    forall f1 f2 g2. compositeProc (parProc f1 f2) (parProc idProc g2) =
+        parProc f1 (compositeProc f2 g2)
 
 "ProcessA: arr/arr"
-    forall f g h. compositeStep (arrStep f) (compositeStep (arrStep g) h) =
-        compositeStep (arrStep (g . f)) h
+    forall f g h. compositeProc (arrProc f) (compositeProc (arrProc g) h) =
+        compositeProc (arrProc (g . f)) h
 "ProcessA: arr/arr-2"
-    forall f g. compositeStep (arrStep f) (arrStep g) = arrStep (g . f)
+    forall f g. compositeProc (arrProc f) (arrProc g) = arrProc (g . f)
 "ProcessA: arr/*" [1]
-    forall f g. compositeStep (arrStep f) g = dimapStep f id g
+    forall f g. compositeProc (arrProc f) g = dimapProc f id g
 "ProcessA: */arr" [1]
-    forall f g. compositeStep f (arrStep g) = dimapStep id g f
+    forall f g. compositeProc f (arrProc g) = dimapProc id g f
 "ProcessA: arr***arr" [0]
-    forall f g. parStep (arrStep f) (arrStep g) = arrStep (f *** g)
+    forall f g. parProc (arrProc f) (arrProc g) = arrProc (f *** g)
   #-}
+
 
 instance
     ArrowApply a => ArrowChoice (ProcessA a)
   where
-    left pa@(ProcessA a) = ProcessA $ proc (ph, eth) -> go ph eth -<< ()
+    left pa0@ProcessA{..} = ProcessA {
+        feed = proc eth -> feed' eth -<< (),
+        sweep = proc eth -> sweep' eth -<< (),
+        suspend = left suspend
+      }
       where
-        go ph (Left x) = proc _ -> 
+        feed' (Left x) = proc () ->
           do
-            (ph', y, pa') <- a -< (ph, x)
-            returnA -< (ph', Left y, left pa')
-        go ph (Right d) = proc _ -> 
-            returnA -< (ph `mappend` Suspend, Right d, left pa)
+            (y, pa) <- feed -< x
+            returnA -< (Left y, left pa)
+        feed' (Right d) = proc () ->
+            returnA -< (Right d, left pa0)
 
-instance
-    (ArrowApply a, ArrowLoop a) => ArrowLoop (ProcessA a)
-  where
-    loop pa = ProcessA $ proc (ph, x) ->
-      do
-        (_, d) <- loop suspended -< x
-        (ph', (y, _), pa') <- step pa -< (ph, (x, d))
-        returnA -< (ph', y, loop pa')
-      where
-        suspended = proc (x, d) ->
+        sweep' (Left x) = proc () ->
           do
-            (_, (y, d'), _) <- step pa -< (Suspend, (x, d))
-            returnA -< ((y, d'), d')
+            (my, pa) <- sweep -< x
+            returnA -< (Left <$> my, left pa)
+        sweep' (Right d) = proc () ->
+            returnA -< (Nothing, left pa0)
 
 
-instance
-    (ArrowApply a, ArrowReader r a) => 
-    ArrowReader r (ProcessA a)
-  where
-    readState = ProcessA $ proc (ph, dm) ->
-      do
-        r <- readState -< dm
-        returnA -< (ph `mappend` Suspend, r, readState)
-
-    newReader = fitEx nr
-      where
-        nr f = proc (p, (x, r)) -> newReader f -< ((p, x), r)
 
 instance
-    (ArrowApply a, ArrowApply a', ArrowAddReader r a a') =>
-    ArrowAddReader r (ProcessA a) (ProcessA a')
+    ArrowApply a => ArrowLoop (ProcessA a)
   where
-    liftReader pa = ProcessA $ proc (ph, x) ->
-      do
-        (ph', y, pa') <- (| liftReader (step pa -< (ph, x)) |)
-        returnA -< (ph', y, liftReader pa')
-
-    elimReader pra = 
-        ProcessA $ arr pre >>> elimReader (step pra) >>> arr post
+    loop (ProcessA {..}) = ProcessA {
+        feed = (Cat.id &&& arr loopSusD) >>> feed >>> arr (\(x, pa') -> (fst x, loop pa')),
+        sweep = (Cat.id &&& arr loopSusD) >>> sweep >>> arr (\(mx, pa') -> (fmap fst mx, loop pa')),
+        suspend = loop suspend
+      }
       where
-        pre (ph, (x, r)) = ((ph, x), r)
-        post (ph, x, pra') = (ph, x, elimReader pra')
-
-
+        loopSusD = loop (suspend >>> \(_, d) -> (d, d))
     
 data Event a = Event a | NoEvent | End deriving (Eq, Show)
 
@@ -543,59 +536,69 @@ catchP pl cont0 =
 
 
 
-constructT :: (Monad m, ArrowApply a) => 
-              (forall b. m b -> a () b) ->
-              PlanT i o m r -> 
-              ProcessA a (Event i) (Event o)
+constructT ::
+    (Monad m, ArrowApply a) => 
+    (forall b. m b -> a () b) ->
+    PlanT i o m r -> 
+    ProcessA a (Event i) (Event o)
+constructT = constructT'
 
-constructT fit0 pl0 = ProcessA $ stepOf fit0 $ F.runFT pl0 pure (free fit0)
+
+constructT' ::
+    forall a m i o r.
+    (Monad m, ArrowApply a) => 
+    (forall b. m b -> a () b) ->
+    PlanT i o m r -> 
+    ProcessA a (Event i) (Event o)
+constructT' fit0 pl0 = prependProc $ F.runFT pl0 pure free
   where
-    stepOf fit' ma = proc arg ->
-      do
-        (evy, stp) <- fit' ma -< ()
-        prependStep evy stp -<< arg
-      
-    prependStep (Event y) stp = arr $ \(ph, _) -> 
-        case ph of
-          Suspend -> 
-              (Suspend, NoEvent, ProcessA $ prependStep (Event y) stp)
-          _ -> 
-              (Feed, Event y, ProcessA stp)
-    prependStep End _ = step stopped
-    prependStep NoEvent stp = stp
+    fit' :: (b -> m c) -> a b c
+    fit' fmy = proc x -> fit0 (fmy x) -<< ()
 
-    stepOfAw fit' fma = proc arg@(ph, _) ->
-      do
-        (evy, stp) <- fit' $ go arg -<< ()
-        let ph' = case evy of {NoEvent -> Suspend; _ -> Feed}
-        returnA -< (ph `mappend` ph', evy, ProcessA stp)
-      where
-        go (Feed, evx) = fma evx
-        go (Sweep, End) = fma End
-        go _ = return (NoEvent, stepOfAw fit' fma)
+    prependProc ::
+        m (Event o, ProcessA a (Event i) (Event o)) ->
+        ProcessA a (Event i) (Event o)
+    prependProc mr = ProcessA {
+        feed = proc ex -> do { r <- fit0 mr -< (); prependFeed r -<< ex} ,
+        sweep = proc ex -> do { r <- fit0 mr -< (); prependSweep r -<< ex},
+        suspend = const NoEvent
+      }
 
-    pure _ =
-        return $ (End, step stopped)
+    prependFeed (Event x, pa) = arr $ const (Event x, pa)
+    prependFeed (NoEvent, pa) = feed pa
+    prependFeed (End, pa) = arr $ const (End, stopped)
+  
+    prependSweep (Event x, pa) = arr $ const (Just (Event x), pa)
+    prependSweep (NoEvent, pa) = sweep pa
+    prependSweep (End, pa) = arr $ const (Just End, stopped)
+  
+    pure _ = return (End, stopped)
 
     free ::
-        (ArrowApply a, Monad m) =>
-        (forall t. m t -> a () t) ->
-        (x -> m (Event o, StepType a (Event i) (Event o)))
-        -> PlanF i o x -> m (Event o, StepType a (Event i) (Event o))
-    free fit' r pl@(AwaitPF f ff) =
-      do
-        return $ (NoEvent, stepOfAw fit' fma)
+        (x -> m (Event o, ProcessA a (Event i) (Event o)))->
+        PlanF i o x ->
+        m (Event o, ProcessA a (Event i) (Event o))
+    free r (YieldPF y cont) =
+        return (Event y, prependProc (r cont))
+    free r pl@(AwaitPF f ff) =
+        return (NoEvent, awaitProc fma)
       where
         fma (Event x) = r (f x)
-        fma NoEvent = free fit' r pl
+        fma NoEvent = free r pl
         fma End = r ff
+    free _ StopPF =
+        return (End, stopped)
 
-    free fit' r (YieldPF y fc) =
-        return $ (Event y, stepOf fit' (r fc))
+    awaitProc fma = ProcessA {
+        feed = fit' fma,
+        sweep = fit' fma >>> first eToM,
+        suspend = const NoEvent
+      }
 
-    free _ _ StopPF =
-        return $ (End, step stopped)
-
+    eToM :: a (Event b) (Maybe (Event b))
+    eToM = arr eToMpure
+    eToMpure NoEvent = Nothing
+    eToMpure e = Just e
 
 
 repeatedlyT :: (Monad m, ArrowApply a) => 
@@ -621,26 +624,6 @@ repeatedly pl = construct $ forever pl
 --
 -- Switches
 --
-evMaybePh :: b -> (a->b) -> (Phase, Event a) -> b
-evMaybePh _ f (Feed, Event x) = f x
-evMaybePh _ f (Sweep, Event x) = f x
-evMaybePh d _ _ = d
-
-
-{-
-type KSwitchLike a b c t =
-    ProcessA a b c ->
-    ProcessA a (b, ) (Event t) ->
-    (ProcessA a b c -> t -> ProcessA a b c) ->
-    ProcessA a b c
-
-switchCore ::
-    ArrowApply a =>
-    KSwitchLike a b c t ->
-    ProcessA a b (c, Event t) -> 
-    (t -> ProcessA a b c) ->
-    ProcessA a b c
--}
 switchCore ::
     (Arrow cat, Arrow a2, Arrow cat1, Occasional t3) =>
     (t4
@@ -675,7 +658,6 @@ dSwitch = switchCore dkSwitch
 rSwitch :: 
     ArrowApply a => ProcessA a b c -> 
     ProcessA a (b, Event (ProcessA a b c)) c
-
 rSwitch p = rSwitch' (p *** Cat.id) >>> arr fst
   where
     rSwitch' pid = kSwitch pid test $ \_ p' -> rSwitch'' (p' *** Cat.id)
@@ -691,6 +673,7 @@ drSwitch p =  drSwitch' (p *** Cat.id)
   where
     drSwitch' pid = dSwitch pid $ \p' -> drSwitch' (p' *** Cat.id)
 
+
 kSwitch ::
     ArrowApply a => 
     ProcessA a b c ->
@@ -698,20 +681,32 @@ kSwitch ::
     (ProcessA a b c -> t -> ProcessA a b c) ->
     ProcessA a b c
 
-kSwitch sf test k = ProcessA $ proc (ph, x) ->
-  do
-    (ph', y, sf') <- step sf -< (ph, x)
-    (phT, evt, test') <- step test -< (ph', (x, y))
+kSwitch sf test k = ProcessA {
+    feed = proc x ->
+      do
+        (y, sf') <- feed sf -< x
+        (evt, test') <- feed test -< (x, y)
+        (case evt
+          of
+            Event t -> feed (k sf' t)
+            _ -> arr $ const (y, kSwitch sf' test' k))
+                -<< x,
+    sweep = proc x ->
+      do
+        (my, sf') <- sweep sf -< x
+        (mevt, test') <-
+            maybe
+                (arr $ const (Nothing, test))
+                (\y -> arr (,y) >>> sweep test)
+                my -<< x
+        (case mevt
+          of
+            Just (Event t) -> sweep (k sf' t)
+            _ -> arr $ const (my, kSwitch sf' test' k))
+                -<< x,
+    suspend = suspend sf
+  }
 
-    let
-        nextA t = k sf' t
-        nextB = kSwitch sf' test' k
-
-    evMaybePh 
-        (arr $ const (phT, y, nextB)) 
-        (step . nextA)
-        (phT, evt)
-            -<< (phT, x)
 
 
 dkSwitch ::
@@ -721,16 +716,32 @@ dkSwitch ::
     (ProcessA a b c -> t -> ProcessA a b c) ->
     ProcessA a b c
 
-dkSwitch sf test k = ProcessA $ proc (ph, x) ->
-  do
-    (ph', y, sf') <- step sf -< (ph, x)
-    (phT, evt, test') <- step test -< (ph', (x, y))
-    
-    let
-        nextA t = k sf' t
-        nextB = dkSwitch sf' test' k
-
-    returnA -< (phT, y, evMaybePh nextB nextA (ph, evt))
+dkSwitch sf test k = ProcessA {
+    feed = proc x ->
+      do
+        (y, sf') <- feed sf -< x
+        (evt, test') <- feed test -< (x, y)
+        (case evt
+          of
+            Event t -> arr $ const (y, k sf' t)
+            _ -> arr $ const (y, dkSwitch sf' test' k))
+                -<< x,
+    sweep = proc x ->
+      do
+        (my, sf') <- sweep sf -< x
+        (mevt, test') <-
+            maybe
+                (arr $ const (Nothing, test))
+                (\y -> arr (,y) >>> sweep test)
+                my -<< x
+        (case mevt
+          of
+            Just (Event t) -> arr $ const (my, k sf' t)
+            _ -> arr $ const (my, dkSwitch sf' test' k))
+                -<< x,
+    suspend = suspend sf
+  }
+{-
 
 
 broadcast :: 
@@ -836,29 +847,10 @@ rpSwitchB = rpSwitch broadcast
 
 -- `dpSwitch` and `drpSwitch` are not implemented.
 
-
+-}
 --
 -- Unsafe primitives
 --
-
--- | Repeatedly call `p`.
---
--- How many times `p` is called is indefinite.
--- So `p` must satisfy the equation below;
---
--- @p &&& p === p >>> (id &&& id)@
-unsafeSteady ::
-    ArrowApply a =>
-    a b c ->
-    ProcessA a b c
-unsafeSteady f =
-    fitEx
-        (\id' ->
-            arr (\(p, x)->((p, ()), x)) >>>
-            (id' *** f) >>>
-            arr (\((q, ()), y)->(q, y)))
-        Cat.id
-      
     
 -- | Repeatedly call `p`.
 --    
@@ -877,16 +869,11 @@ unsafeExhaust ::
 unsafeExhaust p =
     go >>> fork
   where
-    go = ProcessA $ proc (ph, x) -> handle ph -<< x
-    
-    handle Suspend =
-        arr $ const (Suspend, NoEvent, go)
-
-    handle ph = proc x ->
-      do
-        ys <- p -< x
-        let ph' = if nullFd ys then Suspend else Feed
-        returnA -< (ph `mappend` ph', Event ys, go)
+    go = ProcessA {
+        feed = p >>> arr (\y -> (Event y, go)),
+        sweep = p >>> arr (\y -> (if nullFd y then Nothing else Just (Event y), go)),
+        suspend = const NoEvent
+      }
 
     fork = repeatedly $ await >>= Fd.mapM_ yield
 
@@ -974,10 +961,10 @@ feed_ input padding =
         else
             return False
 
-feed :: 
+feedR :: 
     Monad m => 
     i -> RM a (Event i) o m Bool
-feed x = feed_ (Event x) NoEvent
+feedR x = feed_ (Event x) NoEvent
 
 
 {-
@@ -993,29 +980,42 @@ freeze ::
 freeze = gets freezeRI
     
 
-sweep :: 
+sweepR :: 
     Monad m =>
     RM a i o m o
-sweep =
+sweepR =
   do
     pa <- freeze
-    fit0 <- gets getFitRI
     ph <- gets getPhaseRI
-    x <- if ph == Feed
-        then gets getInputRI
-        else gets getPaddingRI
-    
-    (ph', y, pa') <- lift $ fit0 (step pa) (ph, x)
-    
     ri <- get
-    put $ ri {
-        freezeRI = 
-            pa',
-        getPhaseRI = 
-            if ph' == Feed then Sweep else ph'
-      }
-
-    return y
+    case ph of
+      Feed ->
+        do
+            fit0 <- gets getFitRI
+            x <- gets getInputRI
+            (y, pa') <- lift $ fit0 (feed pa) x
+            put $ ri {
+                freezeRI = pa',
+                getPhaseRI = Sweep
+              }
+            return y
+      Sweep ->  
+        do
+            fit0 <- gets getFitRI
+            x <- gets getPaddingRI
+            (my, pa') <- lift $ fit0 (sweep pa) x
+            put $ ri {
+                freezeRI = pa',
+                getPhaseRI = if isJust my then Sweep else Suspend
+              }
+            return $ fromMaybe (suspend pa x) my
+      Suspend ->
+        do
+            x <- gets getPaddingRI
+            return $ suspend pa x
+    
+    
+    
 
 
 sweepAll :: 
@@ -1026,7 +1026,7 @@ sweepAll outpre =
         while_ 
             ((not . (== Suspend)) `liftM` lift (gets getPhaseRI)) $
           do
-            evx <- lift sweep
+            evx <- lift sweepR
             case evx
               of
                 Event x ->
@@ -1065,10 +1065,10 @@ runOn outpre pa0 = unArrowMonad $ \xs ->
   where
     feedSweep x cont =
       do
-        _ <- lift $ feed x
+        _ <- lift $ feedR x
         ((), wer) <- listen $ sweepAll outpre
         if getContWE wer then cont else return ()
-      
+
 
 
 newtype Builder a = Builder {
@@ -1122,7 +1122,8 @@ stepRun ::
     ArrowApply a =>
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo [c], ProcessA a (Event b) (Event c))
-
+stepRun = undefined
+{-
 stepRun pa0 = unArrowMonad $ \x ->
   do
     (pa, wer)  <- runRM arrowMonad pa0 $ runWriterT $ 
@@ -1141,13 +1142,14 @@ stepRun pa0 = unArrowMonad $ \x ->
         hasConsumed = True, 
         hasStopped = not getContWE
       }
-
+-}
 -- | Execute until an output produced.
 stepYield :: 
     ArrowApply a =>
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo (Maybe c), ProcessA a (Event b) (Event c))
-
+stepYield = undefined
+{-
 stepYield pa0 = unArrowMonad $ \x -> runRM arrowMonad pa0 $ evalStateT `flip` mempty $
   do
     go x
@@ -1178,3 +1180,4 @@ stepYield pa0 = unArrowMonad $ \x -> runRM arrowMonad pa0 $ evalStateT `flip` me
                 modify $ \ri -> ri { hasStopped = True }
 
 
+-}
