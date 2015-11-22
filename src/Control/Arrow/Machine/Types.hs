@@ -62,13 +62,12 @@ module
         drSwitch,
         kSwitch,
         dkSwitch,
-        --pSwitch,
-        --pSwitchB,
-        --rpSwitch,
-        --rpSwitchB,
-        --par,
-        --parB,
-
+        pSwitch,
+        pSwitchB,
+        rpSwitch,
+        rpSwitchB,
+        par,
+        parB,
         
         -- * Primitive machines - other safe primitives
         fit,
@@ -83,10 +82,11 @@ import Data.Profunctor (Profunctor, dimap, rmap)
 import Control.Arrow.Operations (ArrowReader(..))
 import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
 import Control.Arrow
-import Control.Monad hiding (join)
+import Control.Monad
 import Control.Monad.Trans
-import Control.Monad.State hiding (join)
-import Control.Monad.Writer hiding ((<>), join)
+import Control.Monad.State
+import Control.Monad.Writer hiding ((<>))
+import Control.Monad.Identity
 import Control.Applicative hiding (pure)
 import qualified Control.Applicative as Ap
 import Data.Foldable as Fd
@@ -118,8 +118,6 @@ instance
 
 type ProcType a b c = ProcessA a b c
 
-step = id
-
 -- | The stream transducer arrow.
 --
 -- To construct `ProcessA` instances, use `Control.Arrow.Machine.Plan.Plan`,
@@ -132,6 +130,51 @@ data ProcessA a b c = ProcessA {
   }
 
 
+-- For internal use
+class
+    (Applicative f, Monad f) => ProcessHelper f
+  where
+    step :: ArrowApply a => ProcessA a b c -> a b (f c, ProcessA a b c)
+    helperToMaybe :: f a -> Maybe a
+    weakly :: a -> f a
+  
+    step' :: ArrowApply a => ProcessA a b c -> a (f b) (f c, ProcessA a b c)
+    step' pa = proc hx ->
+      do
+        let mx = helperToMaybe hx
+        maybe
+            (arr $ const (suspend pa <$> hx, pa))
+            (\x -> proc _ -> step pa -< x)
+            mx
+                -<< ()
+
+instance
+    ProcessHelper Identity
+  where
+    step pa = feed pa >>> first (arr Identity)
+    helperToMaybe = Just . runIdentity
+    weakly = Identity
+
+instance
+    ProcessHelper Maybe
+  where
+    step = sweep
+    helperToMaybe = id
+    weakly _ = Nothing
+
+makePA ::
+    Arrow a =>
+    (forall f. ProcessHelper f =>
+        a b (f c, ProcessA a b c)) ->
+    (b -> c) ->
+    ProcessA a b c
+makePA h sus = ProcessA {
+    feed = h >>> first (arr runIdentity),
+    sweep = h,
+    suspend = sus
+  }
+            
+       
 
 fit :: (Arrow a, Arrow a') => 
        (forall p q. a p q -> a' p q) -> 
@@ -146,26 +189,24 @@ fit f (ProcessA {..})  = ProcessA
 
 
 instance
-    Arrow a => Profunctor (ProcessA a)
+    ArrowApply a => Profunctor (ProcessA a)
   where
-    dimap f g pa = dimapProc f g (step pa)
+    dimap = dimapProc
     {-# INLINE dimap #-}
 
-dimapProc :: Arrow a => 
-             (b->c)->(d->e)->
-             ProcType a c d -> ProcType a b e
-dimapProc f g (ProcessA {..}) = ProcessA 
-  {
-    feed = arr f >>> feed >>> (arr g *** arr (dimapProc f g)) ,
-    sweep = arr f >>> sweep >>> (arr (fmap g) *** arr (dimapProc f g)),
-    suspend = dimap f g suspend
-  }
+dimapProc ::
+    ArrowApply a => 
+    (b->c)->(d->e)->
+    ProcType a c d -> ProcType a b e
+dimapProc f g pa = makePA
+    (arr f >>> step pa >>> (arr (fmap g) *** arr (dimapProc f g)))
+    (dimap f g (suspend pa))
 
 {-# NOINLINE dimapProc #-}
 
 
 instance
-    Arrow a => Functor (ProcessA a i)
+    ArrowApply a => Functor (ProcessA a i)
   where
     fmap = rmap
 
@@ -181,7 +222,7 @@ instance
   where
     id = idProc
     {-# INLINE id #-}
-    g . f = compositeProc (step f) (step g)
+    g . f = compositeProc f g
     {-# INLINE (.) #-}
 
 
@@ -191,13 +232,13 @@ instance
     arr = arrProc
     {-# INLINE arr #-}
 
-    first pa = parProc (step pa) idProc
+    first pa = parProc pa idProc
     {-# INLINE first #-}
 
-    second pa = parProc idProc (step pa)
+    second pa = parProc idProc pa
     {-# INLINE second #-}
 
-    pa *** pb = parProc (step pa) (step pb)
+    (***) = parProc
     {-# INLINE (***) #-}
 
 
@@ -215,8 +256,8 @@ parProc f g = ProcessA {
       do
         (my1, f') <- sweep f -< x1
         (my2, g') <- sweep g -< x2
-        let y1 = fromMaybe (suspend f x1) my1
-            y2 = fromMaybe (suspend g x2) my2
+        let y1 = fromMaybe (suspend f' x1) my1 -- suspend f ?
+            y2 = fromMaybe (suspend g' x2) my2
             r = if (isNothing my1 && isNothing my2) then Nothing else Just (y1, y2)
         returnA -< (r, parProc f' g'),
     suspend = suspend f *** suspend g
@@ -224,19 +265,11 @@ parProc f g = ProcessA {
 {-# NOINLINE parProc #-}
 
 idProc :: ArrowApply a => ProcType a b b
-idProc = ProcessA {
-    feed = arr $ \x -> (x, idProc),
-    sweep = arr $ \_ -> (Nothing, idProc),
-    suspend = id
-  }
+idProc = makePA (arr $ \x -> (weakly x, idProc)) id
 {-# NOINLINE idProc #-}
 
 arrProc :: ArrowApply a => (b->c) -> ProcType a b c
-arrProc f =  ProcessA {
-    feed = arr $ \x -> (f x, arrProc f),
-    sweep = arr $ \_ -> (Nothing, arrProc f),
-    suspend = f
-  }
+arrProc f = makePA (arr $ \x -> (weakly (f x), arrProc f)) f
 {-# NOINLINE arrProc #-}
 
 -- |Composition is proceeded by the backtracking strategy.
@@ -335,38 +368,29 @@ compositeProc f g = ProcessA {
 instance
     ArrowApply a => ArrowChoice (ProcessA a)
   where
-    left pa0@ProcessA{..} = ProcessA {
-        feed = proc eth -> feed' eth -<< (),
-        sweep = proc eth -> sweep' eth -<< (),
-        suspend = left suspend
-      }
+    left pa0 = makePA
+        (proc eth -> sweep' pa0 eth -<< ())
+        (left $ suspend pa0)
       where
-        feed' (Left x) = proc () ->
+        sweep' pa (Left x) = proc () ->
           do
-            (y, pa) <- feed -< x
-            returnA -< (Left y, left pa)
-        feed' (Right d) = proc () ->
-            returnA -< (Right d, left pa0)
-
-        sweep' (Left x) = proc () ->
-          do
-            (my, pa) <- sweep -< x
-            returnA -< (Left <$> my, left pa)
-        sweep' (Right d) = proc () ->
-            returnA -< (Nothing, left pa0)
-
-
+            (my, pa') <- step pa -< x
+            returnA -< (Left <$> my, left pa')
+        sweep' pa (Right d) = proc () ->
+            returnA -< (weakly (Right d), left pa)
 
 instance
     ArrowApply a => ArrowLoop (ProcessA a)
   where
-    loop (ProcessA {..}) = ProcessA {
-        feed = (Cat.id &&& arr loopSusD) >>> feed >>> arr (\(x, pa') -> (fst x, loop pa')),
-        sweep = (Cat.id &&& arr loopSusD) >>> sweep >>> arr (\(mx, pa') -> (fmap fst mx, loop pa')),
-        suspend = loop suspend
-      }
+    loop pa =
+        makePA 
+            (proc x ->
+              do
+                (hyd, pa') <- step pa -< (x, loopSusD x)
+                returnA -< (fst <$> hyd, loop pa'))
+            (loop $ suspend pa)
       where
-        loopSusD = loop (suspend >>> \(_, d) -> (d, d))
+        loopSusD = loop (suspend pa >>> \(_, d) -> (d, d))
     
 data Event a = Event a | NoEvent | End deriving (Eq, Show)
 
@@ -680,34 +704,17 @@ kSwitch ::
     ProcessA a (b, c) (Event t) ->
     (ProcessA a b c -> t -> ProcessA a b c) ->
     ProcessA a b c
-
-kSwitch sf test k = ProcessA {
-    feed = proc x ->
+kSwitch sf test k = makePA
+    (proc x ->
       do
-        (y, sf') <- feed sf -< x
-        (evt, test') <- feed test -< (x, y)
-        (case evt
+        (hy, sf') <- step sf -< x
+        (hevt, test') <- step' test -< (x,) <$> hy
+        (case (helperToMaybe hevt)
           of
-            Event t -> feed (k sf' t)
-            _ -> arr $ const (y, kSwitch sf' test' k))
-                -<< x,
-    sweep = proc x ->
-      do
-        (my, sf') <- sweep sf -< x
-        (mevt, test') <-
-            maybe
-                (arr $ const (Nothing, test))
-                (\y -> arr (,y) >>> sweep test)
-                my -<< x
-        (case mevt
-          of
-            Just (Event t) -> sweep (k sf' t)
-            _ -> arr $ const (my, kSwitch sf' test' k))
-                -<< x,
-    suspend = suspend sf
-  }
-
-
+            Just (Event t) -> step (k sf' t)
+            _ -> arr $ const (hy, kSwitch sf' test' k))
+                -<< x)
+    (suspend sf)
 
 dkSwitch ::
     ArrowApply a => 
@@ -715,83 +722,84 @@ dkSwitch ::
     ProcessA a (b, c) (Event t) ->
     (ProcessA a b c -> t -> ProcessA a b c) ->
     ProcessA a b c
-
-dkSwitch sf test k = ProcessA {
-    feed = proc x ->
+dkSwitch sf test k = makePA
+    (proc x ->
       do
-        (y, sf') <- feed sf -< x
-        (evt, test') <- feed test -< (x, y)
-        (case evt
+        (hy, sf') <- step sf -< x
+        (hevt, test') <- step' test -< (x,) <$> hy
+        (case (helperToMaybe hevt)
           of
-            Event t -> arr $ const (y, k sf' t)
-            _ -> arr $ const (y, dkSwitch sf' test' k))
-                -<< x,
-    sweep = proc x ->
-      do
-        (my, sf') <- sweep sf -< x
-        (mevt, test') <-
-            maybe
-                (arr $ const (Nothing, test))
-                (\y -> arr (,y) >>> sweep test)
-                my -<< x
-        (case mevt
-          of
-            Just (Event t) -> arr $ const (my, k sf' t)
-            _ -> arr $ const (my, dkSwitch sf' test' k))
-                -<< x,
-    suspend = suspend sf
-  }
-{-
-
-
+            Just (Event t) -> arr $ const (hy, k sf' t)
+            _ -> arr $ const (hy, dkSwitch sf' test' k))
+                -<< x)
+    (suspend sf)
+  
 broadcast :: 
     Functor col =>
     b -> col sf -> col (b, sf)
-
 broadcast x sfs = fmap (\sf -> (x, sf)) sfs
-
 
 par ::
     (ArrowApply a, Tv.Traversable col) =>
     (forall sf. (b -> col sf -> col (ext, sf))) ->
     col (ProcessA a ext c) ->
     ProcessA a b (col c)
-
-par r sfs = ProcessA $ parCore r sfs >>> arr cont
-  where
-    cont (ph, ys, sfs') = (ph, ys, par r sfs')
+par r sfs =
+    makePA
+        (parCore r sfs >>> second (arr (par r)))
+        (suspendAll r sfs)
 
 parB ::
     (ArrowApply a, Tv.Traversable col) =>
     col (ProcessA a b c) ->
     ProcessA a b (col c)
-
 parB = par broadcast
 
-parCore ::
+suspendAll :: 
     (ArrowApply a, Tv.Traversable col) =>
     (forall sf. (b -> col sf -> col (ext, sf))) ->
     col (ProcessA a ext c) ->
-    a (Phase, b) (Phase, col c, col (ProcessA a ext c))
+    b -> col c
+suspendAll r sfs = (sus <$>) . (r `flip` sfs)
+  where
+    sus (ext, sf) = suspend sf ext
+     
+traverseResult ::
+    forall h col c.
+    (Tv.Traversable col, ProcessHelper h) =>
+    col (h c, c) -> h (col c)
+traverseResult zs =
+    let
+        pr :: (h c, c) -> StateT Bool h c
+        pr (hx, d) =
+          do
+            let mx = helperToMaybe hx
+            if isJust mx then put True else return ()
+            return (fromMaybe d mx)
+        hxs = runStateT (Tv.sequence (pr <$> zs)) False
+        exist = fromMaybe False $ helperToMaybe (snd <$> hxs)
+        result = fst <$> hxs
+      in
+        if exist then result else join (weakly result)
+     
+parCore ::
+    (ArrowApply a, Tv.Traversable col, ProcessHelper h) =>
+    (forall sf. (b -> col sf -> col (ext, sf))) ->
+    col (ProcessA a ext c) ->
+    a b (h (col c), col (ProcessA a ext c))
 
-parCore r sfs = proc (ph, x) ->
+parCore r sfs = proc x ->
   do
     let input = r x sfs
-
-    ret <- unwrapArrow (Tv.sequenceA (fmap (WrapArrow . appPh) input)) -<< ph
-
-    let ph' = Fd.foldMap getPh ret
-        zs = fmap getZ ret
-        sfs' = fmap getSf ret
-
-    returnA -< (ph', zs, sfs')
-
+    ret <- unwrapArrow (Tv.sequenceA (fmap (WrapArrow . app') input)) -<< ()
+    let zs = traverseResult $ fmap fst ret
+        sfs' = fmap snd ret
+    returnA -< (zs, sfs')
   where
-    appPh (y, sf) = proc ph -> step sf -< (ph, y)
-
-    getPh (ph, _, _) = ph
-    getZ (_, z, _) = z
-    getSf (_, _, sf) = sf
+    app' (y, sf) = proc () ->
+      do
+        (hz, sf') <- step sf -< y
+        returnA -< ((hz, suspend sf' y), sf')
 
 
 pSwitch ::
@@ -801,53 +809,55 @@ pSwitch ::
     ProcessA a (b, col c) (Event mng) ->
     (col (ProcessA a ext c) -> mng -> ProcessA a b (col c)) ->
     ProcessA a b (col c)
-
-pSwitch r sfs test k = ProcessA $ proc (ph, x) ->
-  do
-    (ph', zs, sfs') <- parCore r sfs -<< (ph, x)
-    (phT, evt, test') <- step test -< (ph', (x, zs))
-
-    evMaybePh
-        (arr $ const (phT, zs, pSwitch r sfs' test' k))
-        (step . (k sfs') )
-        (phT, evt)
-            -<< (ph, x)
-
+pSwitch r sfs test k = makePA
+    (proc x ->
+      do
+        (hzs, sfs') <- parCore r sfs -<< x
+        (hevt, test') <- step' test -< (x,) <$> hzs
+        (case helperToMaybe hevt
+          of
+            Just (Event t) -> (step (k sfs' t))
+            _ -> arr $ const (hzs, pSwitch r sfs' test' k))
+                -<< x)
+    (suspendAll r sfs)
+  
 pSwitchB ::
     (ArrowApply a, Tv.Traversable col) =>
     col (ProcessA a b c) ->
     ProcessA a (b, col c) (Event mng) ->
     (col (ProcessA a b c) -> mng -> ProcessA a b (col c)) ->
     ProcessA a b (col c)
-
 pSwitchB = pSwitch broadcast
+
 
 
 rpSwitch ::
     (ArrowApply a, Tv.Traversable col) =>
     (forall sf. (b -> col sf -> col (ext, sf))) ->
     col (ProcessA a ext c) ->
-    ProcessA a (b, Event (col (ProcessA a ext c) -> col (ProcessA a ext c)))
+    ProcessA a
+        (b, Event (col (ProcessA a ext c) -> col (ProcessA a ext c)))
         (col c)
-
-rpSwitch r sfs = ProcessA $ proc (ph, (x, evCont)) ->
-  do
-    let sfsNew = evMaybePh sfs ($sfs) (ph, evCont)
-    (ph', ws, sfs') <- parCore r sfsNew -<< (ph, x)
-    returnA -< (ph' `mappend` Suspend, ws, rpSwitch r sfs')
-
+rpSwitch r sfs = makePA
+    (proc (x, evCont) ->
+      do
+        let sfsNew = case evCont of {Event f -> f sfs; _ -> sfs}
+        (hzs, sfs') <- parCore r sfsNew -<< x
+        returnA -< (hzs, rpSwitch r sfs'))
+    (fst >>> suspendAll r sfs)
+    
 
 rpSwitchB ::
     (ArrowApply a, Tv.Traversable col) =>
     col (ProcessA a b c) ->
-    ProcessA a (b, Event (col (ProcessA a b c) -> col (ProcessA a b c)))
+    ProcessA a
+        (b, Event (col (ProcessA a b c) -> col (ProcessA a b c)))
         (col c)
-
 rpSwitchB = rpSwitch broadcast
 
 -- `dpSwitch` and `drpSwitch` are not implemented.
 
--}
+
 --
 -- Unsafe primitives
 --
@@ -1122,14 +1132,12 @@ stepRun ::
     ArrowApply a =>
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo [c], ProcessA a (Event b) (Event c))
-stepRun = undefined
-{-
 stepRun pa0 = unArrowMonad $ \x ->
   do
     (pa, wer)  <- runRM arrowMonad pa0 $ runWriterT $ 
       do
         sweepAll singleton
-        _ <- lift $ feed x
+        _ <- lift $ feedR x
         sweepAll singleton
         lift $ freeze
     return $ (retval wer, pa)
@@ -1142,14 +1150,12 @@ stepRun pa0 = unArrowMonad $ \x ->
         hasConsumed = True, 
         hasStopped = not getContWE
       }
--}
+
 -- | Execute until an output produced.
 stepYield :: 
     ArrowApply a =>
     ProcessA a (Event b) (Event c) ->
     a b (ExecInfo (Maybe c), ProcessA a (Event b) (Event c))
-stepYield = undefined
-{-
 stepYield pa0 = unArrowMonad $ \x -> runRM arrowMonad pa0 $ evalStateT `flip` mempty $
   do
     go x
@@ -1160,10 +1166,10 @@ stepYield pa0 = unArrowMonad $ \x -> runRM arrowMonad pa0 $ evalStateT `flip` me
   where 
     go x =
       do
-        csmd <- lift $ feed x
+        csmd <- lift $ feedR x
         modify $ \ri -> ri { hasConsumed = csmd }
                              
-        evo <- lift sweep
+        evo <- lift sweepR
         
         case evo
           of
@@ -1179,5 +1185,3 @@ stepYield pa0 = unArrowMonad $ \x -> runRM arrowMonad pa0 $ evalStateT `flip` me
             End ->
                 modify $ \ri -> ri { hasStopped = True }
 
-
--}

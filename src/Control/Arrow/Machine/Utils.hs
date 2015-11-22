@@ -13,7 +13,7 @@ module
         dHold,
         accum,
         dAccum,
-        --edge,
+        edge,
         passRecent,
         withRecent,
 
@@ -27,10 +27,10 @@ module
         drSwitch,
         kSwitch,
         dkSwitch,
-        --pSwitch,
-        --pSwitchB,
-        --rpSwitch,
-        --rpSwitchB,
+        pSwitch,
+        pSwitchB,
+        rpSwitch,
+        rpSwitchB,
 
         -- * Other utility arrows
         tee,
@@ -41,8 +41,8 @@ module
         filter,
         echo,
         anytime,
-        --par,
-        --parB,
+        par,
+        parB,
         now,
         onEnd
        )
@@ -90,13 +90,20 @@ dAccum ::
     ArrowApply a => b -> ProcessA a (Event (b->b)) b
 dAccum x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 
-{-
+
 edge :: 
     (ArrowApply a, Eq b) =>
     ProcessA a b (Event b)
+edge = proc x ->
+  do
+    rec
+        ev <- unsafeExhaust (arr judge) -< (prv, x)
+        prv <- dHold Nothing -< Just x <$ ev
+    returnA -< ev
+  where
+    judge (prv, x) = if prv == Just x then Nothing else Just x
 
-edge = 
--}
+
 
 {-# DEPRECATED passRecent, withRecent "Use `hold` instead" #-}
 infixr 9 `passRecent`

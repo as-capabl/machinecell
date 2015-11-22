@@ -22,6 +22,7 @@ module
         constant,
         hold,
         accum,
+        fromEq,
         
         edge,
         asUpdater,
@@ -115,6 +116,14 @@ accum ::
     P.ProcessA a (P.Event (b->b)) (T b)
 accum i =
     (onUpdate &&& P.accum i) >>> makeT
+
+fromEq ::
+    (ArrowApply a, Eq b) =>
+    P.ProcessA a b (T b)
+fromEq = proc x ->
+  do
+    ev <- P.edge -< x
+    returnA -< T (P.collapse ev) x
 
 edge ::
     ArrowApply a =>
