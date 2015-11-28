@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 
 module
     Main
@@ -42,11 +43,11 @@ instance ArrowIO MainArrow
 
 -- フォーム
 data MyForm a = MyForm { 
-      myFormF :: Wx.Frame a,
-      myFormLabel :: Wx.StaticText a,
-      myFormCounter :: Wx.StaticText a,
-      myFormBtns :: [(Int, Wx.Button a)]
-}
+    myFormF :: Wx.Frame a,
+    myFormLabel :: Wx.StaticText a,
+    myFormCounter :: Wx.StaticText a,
+    myFormBtns :: [(Int, Wx.Button a)]
+  }
 
 
 -- コマンド
@@ -82,7 +83,7 @@ machine = proc world ->
     form <- P.anytime (arrIO0 setup) -< initMsg
 
     -- formが作成されたらgoにスイッチ
-    P.rSwitch (arr $ const P.noEvent) -< (world, go <$> form)
+    P.rSwitch P.muted -< (world, go <$> form)
 
   where
     -- GUI初期化
@@ -98,7 +99,7 @@ machine = proc world ->
             return (i, btn)
 
         Wx.set f [Wx.layout := Wx.column 5 
-                        ([Wx.widget lbl, Wx.widget cntr] ++ (Wx.widget <$> snd <$> btns))]
+                    ([Wx.widget lbl, Wx.widget cntr] ++ (Wx.widget <$> snd <$> btns))]
 
         return $ MyForm f lbl cntr btns
 
@@ -110,26 +111,27 @@ machine = proc world ->
             took <- onBtnAll myFormBtns -< world
     
             -- ゲームコルーチンを走らせる
-            numStones' <- P.cycleDelay -< D.value numStones
-            command <- game myFormF -< (,) numStones' <$> took
+            command <- game myFormF -< (D.value numStones,) <$> took
     
-            -- ゲーム開始をハンドル
+            -- ゲーム開始ならばランダムに石の数を決める
             newGameMsg <- forkOf _NewGame -< command
             newGameStones <- P.anytime (arrIO0 $ randomRIO (7, 30)) -< newGameMsg
             
-            -- 新しい石の数を適用
+            -- コルーチンが石の数を変えたら追従
             newStones <- forkOf _Stone -< command
+
+            -- 現在の石の数を保持
             numStones <- D.hold (-1) <<< P.gather -< [newStones, newGameStones]
 
-        -- 数ラベル
-        counterText <- D.arr show -< numStones
-        WxP.bind Wx.text -< (myFormCounter, counterText)
-
-        -- メッセージ
-        message <- D.hold "" <<< forkOf _Message -< command
-        WxP.bind Wx.text -< (myFormLabel, message)
+            -- 数ラベルの表示
+            counterText <- D.arr show -< numStones
+            WxP.bind Wx.text -< (myFormCounter, counterText)
+    
+            -- メッセージの表示
+            message <- D.hold "" <<< forkOf _Message -< command
+            WxP.bind Wx.text -< (myFormLabel, message)
         
-        returnA -< P.noEvent
+        P.muted -< world
 
 
 game f = P.constructT arrIO0 $

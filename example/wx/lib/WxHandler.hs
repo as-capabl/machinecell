@@ -67,6 +67,10 @@ data World a = World {
       worldGetEvent :: P.Event (EventID, Any)
 }
 
+instance
+    P.Occasional' (World a)
+  where
+    collapse = P.collapse . worldGetEvent
 
 
 -- Internal functions.
@@ -75,11 +79,10 @@ listenID ::
     P.ProcessA a (World a, EventID) (P.Event Any)
 listenID = proc (World _ etp, myID) ->
   do
-     ret <- P.filter (arr fst) -< go myID <$> etp
-     returnA -< snd <$> ret
-
+    returnA -< P.filterJust $ go myID <$> etp
   where
-    go myID (curID, ea) = (curID == myID, ea)
+    go myID (curID, ea) | curID == myID = Just ea
+    go _ _ = Nothing
 
 
 listen :: 
@@ -87,12 +90,14 @@ listen ::
     a (Any -> IO (), w) () ->
     a Any ev -> 
     P.ProcessA a (World a, w) (P.Event ev)
-listen reg getter = proc (world@(World env etp), ia) ->
+listen reg getter = proc (world@(World env _), ia) ->
   do
     initMsg <- P.edge -< ia
     evId <- P.anytime (arrIO newID) -< env <$ initMsg
 
-    (returnA -< evId) `P.passRecent` \myID ->
+    P.rSwitch (P.muted <<< arr fst) -< ((world, (initMsg, ia)), listener <$> evId)
+  where
+    listener myID = proc (world@(World env _), (initMsg, ia)) ->
       do
         P.anytime reg -< (handleProc env myID, ia) <$ initMsg
      
@@ -117,7 +122,7 @@ onInit = proc world ->
     P.echo -< () <$ ea
 
 
--- |Fires on Wx event.
+-- |Fires on Wx events.
 on :: 
     (Eq w, ArrowIO a, ArrowApply a) => 
     Wx.Event w (arg -> IO ()) -> 
@@ -160,22 +165,27 @@ wxReactimate ::
     (forall b c. a b c -> b -> IO c) ->
     P.ProcessA a (World a) (P.Event ()) -> 
     IO ()
-wxReactimate run init = Wx.start go
+wxReactimate run init =
+  do
+    rec vID <- newMyRef $ inclID initialID
+        vSt <- newMyRef st
+
+        let env = EventEnv { 
+                  envGetIDPool = vID,
+                  envGetState = vSt,
+                  envGetRun = run
+                }
+
+        let init' = proc etp -> init -< World env etp
+
+        let st = init'
+    Wx.start $ go env
+
+    -- Clean up
+    stH <- myRefGet $ envGetState env
+    envGetRun env (P.run_ stH) []
   where
-    go =
+    go env =
       do
-        rec vID <- newMyRef $ inclID initialID
-            vSt <- newMyRef st
-
-            let env = EventEnv { 
-                      envGetIDPool = vID,
-                      envGetState = vSt,
-                      envGetRun = run
-                    }
-
-            let init' = proc etp -> init -< World env etp
-
-            let st = init'
-
-
         handleProc env initialID (unsafeCoerce ())
+

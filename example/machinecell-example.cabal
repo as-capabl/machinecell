@@ -1,0 +1,36 @@
+name:                machinecell-example
+version:             0.1.0.0
+synopsis:            Machiecell example
+-- description:
+license:             PublicDomain
+license-file:        LICENSE
+author:              Hidenori Azuma
+maintainer:          as-capabl@gmail.com
+-- copyright:
+category:            Control
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+executable reader
+  main-is:             reader.hs
+  -- other-modules:
+  other-extensions:    Arrows, RankNTypes, FlexibleInstances, RecursiveDo, TypeSynonymInstances, RecordWildCards, MultiWayIf, TemplateHaskell
+  build-depends:       base >=4.6 && <4.9, arrows, mtl, random >=1.1 && <1.2, machinecell >= 3.0.0, lens
+  hs-source-dirs:      reader
+  default-language:    Haskell2010
+
+executable wx-hello
+  main-is:		Main.hs
+  build-depends:       base >=4.6 && <4.9, arrows, mtl, random >=1.1 && <1.2, hxt, wxcore, wx, machinecell >= 3.0.0
+  other-extensions:    Arrows, RankNTypes, FlexibleInstances, RecursiveDo, TypeSynonymInstances, RecordWildCards, MultiWayIf, TemplateHaskell
+  hs-source-dirs:      wx/lib, wx/hello
+  default-language:    Haskell2010
+
+executable wx-stone
+  main-is:		Main.hs
+  build-depends:       base >=4.6 && <4.9, arrows, mtl, random >=1.1 && <1.2, lens, hxt, wxcore, wx, machinecell >= 3.0.0
+  other-extensions:    Arrows, RankNTypes, FlexibleInstances, RecursiveDo, TypeSynonymInstances, RecordWildCards, MultiWayIf, TemplateHaskell
+  hs-source-dirs:      wx/lib, wx/stone
+  default-language:    Haskell2010
+

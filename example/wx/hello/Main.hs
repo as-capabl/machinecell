@@ -34,21 +34,13 @@ data MyForm a b c = MyForm {
       myFormBtnDlg :: Wx.Button b,
       myFormBtnQuit :: Wx.Button c
 }
+
 machine = proc world ->
   do
     initMsg <- WxP.onInit -< world
     form <- P.anytime (arrIO0 setup) -< initMsg
 
-    (returnA -< form) `P.passRecent` \(MyForm f btnDlg btnQuit) ->
-      do    
-        dialogMsg <- WxP.on0 Wx.command -< (world, btnDlg)
-        P.anytime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
-                -< f <$ dialogMsg
-
-        quitMsg <- WxP.on0 Wx.command -< (world, btnQuit)
-        P.anytime (arrIO Wx.close) -< f <$ quitMsg
-
-
+    P.rSwitch P.muted -< (world, drive <$> form)
   where
     setup = 
       do
@@ -60,6 +52,14 @@ machine = proc world ->
 
         return $ MyForm f btnDialog btnQuit
 
+    drive (MyForm f btnDlg btnQuit) = proc world ->
+      do
+        dialogMsg <- WxP.on0 Wx.command -< (world, btnDlg)
+        P.anytime (arrIO (\f -> Wx.infoDialog f "Hello" "Hello")) 
+                -< f <$ dialogMsg
+
+        quitMsg <- WxP.on0 Wx.command -< (world, btnQuit)
+        P.anytime (arrIO Wx.close) -< f <$ quitMsg
 
 main = 
   do
