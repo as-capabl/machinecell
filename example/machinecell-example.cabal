@@ -12,6 +12,14 @@ build-type:          Simple
 -- extra-source-files:
 cabal-version:       >=1.10
 
+executable counter
+  main-is:            Main.hs
+  -- other-modules:
+  other-extensions:    Arrows
+  build-depends:       base >=4.6 && <4.9, arrows, mtl, machinecell >= 3.0.0
+  hs-source-dirs:      counter
+  default-language:    Haskell2010
+
 executable reader
   main-is:             reader.hs
   -- other-modules:

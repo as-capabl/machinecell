@@ -19,7 +19,7 @@ counter =
     proc ev -> 
       do
         rec output <- returnA -< (\reset -> if reset then 0 else next) <$> ev
-            next <- P.hold 0 <<< P.delay -< (+1) <$> output
+            next <- P.dHold 0 -< (+1) <$> output
         returnA -< output  
 
 main = print $ P.run counter (map b "ffffffffttfftt")
