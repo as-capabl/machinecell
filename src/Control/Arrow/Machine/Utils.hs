@@ -14,8 +14,6 @@ module
         accum,
         dAccum,
         edge,
-        passRecent,
-        withRecent,
 
         -- * Switches
         -- | Switches inspired by Yampa library.
@@ -44,22 +42,23 @@ module
         par,
         parB,
         now,
-        onEnd
+        onEnd,
+    
+        -- * Transformer
+        readerProc
        )
 where
 
 import Prelude hiding (filter)
 
-import Data.Maybe (fromMaybe)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Foldable as Fd
 import qualified Control.Category as Cat
 import Control.Monad.Trans
 import Control.Monad.State
 import Control.Arrow
-import Control.Arrow.Operations (ArrowState(..))
-import Control.Arrow.Transformer.State (ArrowAddState(..), StateArrow())
 import Control.Applicative
+import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
 
 import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
@@ -102,36 +101,6 @@ edge = proc x ->
     returnA -< ev
   where
     judge (prv, x) = if prv == Just x then Nothing else Just x
-
-
-
-{-# DEPRECATED passRecent, withRecent "Use `hold` instead" #-}
-infixr 9 `passRecent`
-
-passRecent :: 
-    (ArrowApply a, Occasional o) =>
-    ProcessA a (AS e) (Event b) ->
-    ProcessA a (e, AS b) o ->
-    ProcessA a (AS e) o
-
-passRecent af ag = proc ase ->
-  do
-    evx <- af -< ase
-    mvx <- hold Nothing -< Just <$> evx
-    case mvx of
-      Just x -> ag -< (fromAS ase, toAS x)
-      _ -> returnA -< noEvent
-
-withRecent :: 
-    (ArrowApply a, Occasional o) =>
-    ProcessA a (e, AS b) o ->
-    ProcessA a (e, AS (Event b)) o
-withRecent af = proc (e, asevx) ->
-  do
-    mvx <- hold Nothing -< Just <$> fromAS asevx
-    case mvx of
-      Just x -> af -< (e, toAS x)
-      _ -> returnA -< noEvent
 
 
 
@@ -255,4 +224,14 @@ onEnd = arr collapse >>> go
   where
     go = repeatedly $
         await `catchP` (yield () >> stop)
+
+-- | Run reader of base arrow.
+readerProc ::
+    (ArrowApply a, ArrowApply a', ArrowAddReader r a a') =>
+    ProcessA a b c ->
+    ProcessA a' (b, r) c
+readerProc pa = arr swap >>> fitW snd (\ar -> arr swap >>> elimReader ar) pa
+  where
+    swap :: (a, b) -> (b, a)
+    swap ~(a, b) = (b, a)
     

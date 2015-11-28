@@ -13,17 +13,25 @@
 module
     Control.Arrow.Machine.Types
       (
-        -- * Basic types
+        -- * Stream transducer type
         ProcessA(),
 
+        -- * Event type and utility
         Occasional' (..),
         Occasional (..),
         Event (),
         condEvent,
         filterEvent,
+        filterJust,
+        filterLeft,
+        filterRight,
         evMap,
         
-        -- * Plan monads
+        -- * Coroutine monad
+        -- | Procedural coroutine monad that can be await or yield values.
+        --
+        -- Coroutines can be encoded to machines by `constructT` or so on and
+        -- then put into `ProcessA` compositions.
         PlanT,
         Plan,
 
@@ -71,6 +79,7 @@ module
         
         -- * Primitive machines - other safe primitives
         fit,
+        fitW,
         
         -- * Primitive machines - unsafe
         unsafeExhaust,
@@ -79,16 +88,13 @@ where
 
 import qualified Control.Category as Cat
 import Data.Profunctor (Profunctor, dimap, rmap)
-import Control.Arrow.Operations (ArrowReader(..))
-import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
 import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.State
 import Control.Monad.Writer hiding ((<>))
 import Control.Monad.Identity
-import Control.Applicative hiding (pure)
-import qualified Control.Applicative as Ap
+import Control.Applicative
 import Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup, (<>))
@@ -123,6 +129,8 @@ type ProcType a b c = ProcessA a b c
 -- To construct `ProcessA` instances, use `Control.Arrow.Machine.Plan.Plan`,
 -- `arr`, functions declared in `Control.Arrow.Machine.Utils`,
 -- or arrow combinations of them.
+--
+-- See an introduction at "Control.Arrow.Machine" documentation.
 data ProcessA a b c = ProcessA {
     feed :: a b (c, ProcessA a b c),
     sweep :: a b (Maybe c, ProcessA a b c),
@@ -175,17 +183,25 @@ makePA h sus = ProcessA {
   }
             
        
+-- |Natural transformation
+fit ::
+    (ArrowApply a, ArrowApply a') => 
+    (forall p q. a p q -> a' p q) -> 
+    ProcessA a b c -> ProcessA a' b c
+fit f pa =
+    arr Identity >>>
+    fitW runIdentity (\ar -> arr runIdentity >>> f ar) pa
 
-fit :: (Arrow a, Arrow a') => 
-       (forall p q. a p q -> a' p q) -> 
-       ProcessA a b c -> ProcessA a' b c
-fit f (ProcessA {..})  = ProcessA
-  {
-    feed = f (feed >>> second (arr $ fit f)),
-    sweep = f (sweep >>> second (arr $ fit f)),
-    suspend = suspend
-  }
-
+-- |Experimental: more general fit.
+--
+-- Should w be a comonad?
+fitW :: (ArrowApply a, ArrowApply a', Functor w) =>
+    (forall p. w p -> p) ->
+    (forall p q. a p q -> a' (w p) q) -> 
+    ProcessA a b c -> ProcessA a' (w b) c
+fitW extr f pa = makePA
+    (f (step pa) >>> arr (second $ fitW extr f))
+    (extr >>> suspend pa)
 
 
 instance
@@ -275,21 +291,21 @@ arrProc f = makePA (arr $ \x -> (weakly (f x), arrProc f)) f
 -- |Composition is proceeded by the backtracking strategy.
 compositeProc :: ArrowApply a => 
               ProcType a b d -> ProcType a d c -> ProcType a b c
-compositeProc f g = ProcessA {
+compositeProc f0 g0 = ProcessA {
     feed = proc x ->
       do
-        (y, f') <- feed f -< x
-        (z, g') <- feed g -< y
+        (y, f') <- feed f0 -< x
+        (z, g') <- feed g0 -< y
         returnA -< (z, compositeProc f' g'),
     sweep = proc x ->
       do
-        (mz, g') <- sweep g -< suspend f x
+        (mz, g') <- sweep g0 -< suspend f0 x
         (case mz
           of
-            Just z -> arr $ const (Just z, compositeProc f g')
-            Nothing -> btrk f g')
+            Just z -> arr $ const (Just z, compositeProc f0 g')
+            Nothing -> btrk f0 g')
                 -<< x,
-    suspend = suspend f >>> suspend g
+    suspend = suspend f0 >>> suspend g0
   }
   where
     btrk f g = proc x ->
@@ -391,8 +407,10 @@ instance
             (loop $ suspend pa)
       where
         loopSusD = loop (suspend pa >>> \(_, d) -> (d, d))
-    
-data Event a = Event a | NoEvent | End deriving (Eq, Show)
+
+-- | Discrete events on a time line.
+-- Created and consumed by various transducers.
+data Event a = Event a | NoEvent | End
 
 
 instance 
@@ -454,17 +472,26 @@ instance
     end = End
 
 
-
--- TODO: テスト
 condEvent :: Bool -> Event a -> Event a
 condEvent _ End = End
 condEvent True ev = ev
 condEvent False _ = NoEvent
 
--- TODO: テスト
 filterEvent :: (a -> Bool) -> Event a -> Event a
 filterEvent cond ev@(Event x) = condEvent (cond x) ev
 filterEvent _ ev = ev
+
+filterJust :: Event (Maybe a) -> Event a
+filterJust (Event (Just x)) = Event x
+filterJust (Event Nothing) = NoEvent
+filterJust NoEvent = NoEvent
+filterJust End = End
+
+filterLeft :: Event (Either a b) -> Event a
+filterLeft = filterJust . fmap (either Just (const Nothing))
+
+filterRight :: Event (Either a b) -> Event b
+filterRight = filterJust . fmap (either (const Nothing) Just)
 
 -- | Alias of "arr . fmap"
 --
@@ -498,7 +525,7 @@ muted ::
     (ArrowApply a, Occasional' b, Occasional c) => ProcessA a b c
 muted = proc x ->
   do
-    ed <- repeatedly $ await `catchP` yield () -< collapse x
+    ed <- construct (forever await `catchP` yield ()) -< collapse x
     rSwitch (arr $ const noEvent) -< ((), stopped <$ ed)
 
 
@@ -522,7 +549,7 @@ yield :: o -> Plan i o ()
 yield x = F.liftF $ YieldPF x ()
 
 await :: Plan i o i
-await = F.FT $ \pure free -> free id (AwaitPF pure (free pure StopPF))
+await = F.FT $ \pr free -> free id (AwaitPF pr (free pr StopPF))
 
 stop :: Plan i o a
 stop = F.liftF $ StopPF
@@ -532,13 +559,13 @@ catchP:: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
 
 catchP pl cont0 = 
-    F.FT $ \pure free ->
+    F.FT $ \pr free ->
         F.runFT
             pl
-            (pure' pure)
-            (free' cont0 pure free)
+            (pr' pr)
+            (free' cont0 pr free)
   where
-    pure' pure = pure
+    pr' pr = pr
 
     free' ::
         Monad m =>
@@ -548,11 +575,11 @@ catchP pl cont0 =
         (y -> m r) ->
         (PlanF i o y) ->
         m r
-    free' cont pure free _ StopPF =
-        F.runFT cont pure free
-    free' cont pure free r (AwaitPF f ff) =
+    free' cont pr free _ StopPF =
+        F.runFT cont pr free
+    free' cont pr free r (AwaitPF f ff) =
         free
-            (either (\_ -> F.runFT cont pure free) r)
+            (either (\_ -> F.runFT cont pr free) r)
             (AwaitPF (Right . f) (Left ff))
     free' _ _ free r pf =
         free r pf
@@ -574,7 +601,7 @@ constructT' ::
     (forall b. m b -> a () b) ->
     PlanT i o m r -> 
     ProcessA a (Event i) (Event o)
-constructT' fit0 pl0 = prependProc $ F.runFT pl0 pure free
+constructT' fit0 pl0 = prependProc $ F.runFT pl0 pr free
   where
     fit' :: (b -> m c) -> a b c
     fit' fmy = proc x -> fit0 (fmy x) -<< ()
@@ -590,13 +617,13 @@ constructT' fit0 pl0 = prependProc $ F.runFT pl0 pure free
 
     prependFeed (Event x, pa) = arr $ const (Event x, pa)
     prependFeed (NoEvent, pa) = feed pa
-    prependFeed (End, pa) = arr $ const (End, stopped)
+    prependFeed (End, _) = arr $ const (End, stopped)
   
     prependSweep (Event x, pa) = arr $ const (Just (Event x), pa)
     prependSweep (NoEvent, pa) = sweep pa
-    prependSweep (End, pa) = arr $ const (Just End, stopped)
+    prependSweep (End, _) = arr $ const (Just End, stopped)
   
-    pure _ = return (End, stopped)
+    pr _ = return (End, stopped)
 
     free ::
         (x -> m (Event o, ProcessA a (Event i) (Event o)))->
@@ -1113,9 +1140,14 @@ run_ pa =
 data ExecInfo fa =
     ExecInfo
       {
-        yields :: fa, -- [a] or Maybe a
-        hasConsumed :: Bool,
-        hasStopped :: Bool
+        yields :: fa, -- ^ Values yielded while the step.
+        hasConsumed :: Bool, -- ^ True if the input value is consumed.
+            --
+            -- False if the machine has stopped unless consuming the input.
+            --
+            -- Or in the case of `stepYield`, this field become false when
+            -- the machine produces a value unless consuming the input.
+        hasStopped :: Bool -- ^ True if the machine has stopped at the end of the step.
       }
     deriving (Eq, Show)
 
@@ -1127,7 +1159,7 @@ instance
         ExecInfo (y1 <|> y2) (c1 || c2) (s1 || s2)
 
 
--- | Execute until an input consumed and the machine suspended.
+-- | Execute until an input consumed and the machine suspends.
 stepRun :: 
     ArrowApply a =>
     ProcessA a (Event b) (Event c) ->

@@ -27,6 +27,20 @@ module
         reading,
         statefully,
 
+        -- * Arrow construction helper (Lens)
+        -- |Lens Isomorphisms between arrows and monads.
+        -- All definitions are defined arrow->monad directions.
+        -- Use with lens operator (^.) and (#).
+        kl,
+        am,
+        rd,
+        uc0,
+        uc1,
+        uc2,
+        uc3,
+        uc4,
+        uc5,
+
         -- * To absorve arrow stack signature difference bettween ghc 7.8 and older.
         AS,
         toAS,
@@ -36,13 +50,17 @@ module
     )
 where
 
+import Prelude hiding ((.), id)
+import Control.Category
 import Control.Arrow
-import Control.Arrow.Operations (readState, store, fetch)
-import Control.Arrow.Transformer.Reader
+import Control.Arrow.Operations (store, fetch)
+import Control.Arrow.Transformer.Reader 
 import Control.Arrow.Transformer.State
-import Control.Monad.Reader (ReaderT, runReaderT)
+import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT, runStateT)
+import Data.Profunctor
 
+       
 #if __GLASGOW_HASKELL__ >= 708
 
 type AS e = (e, ())
@@ -137,10 +155,7 @@ reading ::
     (forall p q. (p->m q)->a p q) -> 
     (b -> ReaderT r m c) ->
     ReaderArrow r a b c
-reading f mr = proc x ->
-  do
-    r <- readState -< ()
-    liftReader (f $ \(x, r) -> runReaderT (mr x) r) -< (x, r)
+reading f mr = ReaderArrow . f $ uncurry (runReaderT . mr)
 
 statefully ::
     (Monad m, Arrow a) =>
@@ -155,9 +170,69 @@ statefully f ms = proc x ->
     returnA -< y
     
 
+type MyIso s t a b =
+    forall p f. (Profunctor p, Functor f) =>
+    p a (f b) -> p s (f t)
+
+type MyIso' s a = MyIso s s a a
+
+myIso ::
+    (s -> a) -> (b -> t) -> MyIso s t a b
+myIso sa bt = dimap sa (fmap bt)
+
+-- |Isomorphsm between m and (Kleisli m)
+kl ::
+    MyIso' (a -> m b) (Kleisli m a b)
+kl = myIso Kleisli runKleisli
+
+-- |Isomorphism between (ArrowMonad a) and a
+am ::
+    ArrowApply a =>
+    MyIso' (b -> ArrowMonad a c) (a b c)
+am = myIso unArrowMonad arrowMonad
+
+rd ::
+    (Arrow a) =>
+    (forall p q. MyIso' (p -> m q) (a p q)) ->
+    MyIso' (b -> ReaderT r m c) (ReaderArrow r a b c)
+rd f = e . f . g
+  where
+    e = myIso
+        (\frmy -> uncurry (runReaderT . frmy))
+        (\fmy -> ReaderT . (curry fmy))
+    g = myIso ReaderArrow runReader
+
+uc0 :: MyIso' (m b) (() -> m b)
+uc0 = myIso const ($())
+
+uc1 :: MyIso' (a1 -> m b) (a1 -> m b)
+uc1 = id
+
+uc2 :: MyIso' (a1 -> a2 -> m b) ((a1, a2) -> m b)
+uc2 = myIso
+    (\f (a1, a2) -> f a1 a2)
+    (\f a1 a2 -> f (a1, a2))
+
+uc3 :: MyIso' (a1 -> a2 -> a3 -> m b) ((a1, a2, a3) -> m b)
+uc3 = myIso
+    (\f (a1, a2, a3) -> f a1 a2 a3)
+    (\f a1 a2 a3 -> f (a1, a2, a3))
+
+uc4 :: MyIso' (a1 -> a2 -> a3 -> a4 -> m b) ((a1, a2, a3, a4) -> m b)
+uc4 = myIso
+    (\f (a1, a2, a3, a4) -> f a1 a2 a3 a4)
+    (\f a1 a2 a3 a4 -> f (a1, a2, a3, a4))
+
+uc5 :: MyIso' (a1 -> a2 -> a3 -> a4 -> a5 -> m b) ((a1, a2, a3, a4, a5) -> m b)
+uc5 = myIso
+    (\f (a1, a2, a3, a4, a5) -> f a1 a2 a3 a4 a5)
+    (\f a1 a2 a3 a4 a5 -> f (a1, a2, a3, a4, a5))
+
 -- |Alternate for `elimReader` that can be used with both ghc 7.8 and older.
 elimR ::
     ArrowAddReader r a a' =>
     a (AS e) b -> a' (e, AS r) b
 elimR f =
     second (arr $ fromAS) >>> elimReader (arr toAS >>> f)
+
+
