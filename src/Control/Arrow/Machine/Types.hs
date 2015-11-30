@@ -28,7 +28,7 @@ module
         evMap,
         
         -- * Coroutine monad
-        -- | Procedural coroutine monad that can be await or yield values.
+        -- | Procedural coroutine monad that can await or yield values.
         --
         -- Coroutines can be encoded to machines by `constructT` or so on and
         -- then put into `ProcessA` compositions.

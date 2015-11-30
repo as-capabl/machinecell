@@ -24,7 +24,7 @@ module
 where
 
 import Prelude hiding (id, (.))
-import Data.Functor
+import Data.Functor ((<$), (<$>))
 import Control.Category
 import Control.Arrow
 import qualified Control.Arrow.Machine as P

@@ -1,9 +1,9 @@
 name:                machinecell-example
 version:             0.1.0.0
 synopsis:            Machiecell example
--- description:
+description:	     Some examples of machinecell library.
 license:             PublicDomain
-license-file:        LICENSE
+-- license-file:
 author:              Hidenori Azuma
 maintainer:          as-capabl@gmail.com
 -- copyright:

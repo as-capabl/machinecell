@@ -41,7 +41,8 @@ module
         uc4,
         uc5,
 
-        -- * To absorve arrow stack signature difference bettween ghc 7.8 and older.
+        -- * Custom arrow syntax helper
+        -- |To absorve arrow stack signature difference bettween ghc 7.8 and older.
         AS,
         toAS,
         fromAS,
