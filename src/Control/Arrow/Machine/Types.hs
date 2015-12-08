@@ -1,6 +1,7 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -9,6 +10,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module
     Control.Arrow.Machine.Types
@@ -32,7 +34,7 @@ module
         --
         -- Coroutines can be encoded to machines by `constructT` or so on and
         -- then put into `ProcessA` compositions.
-        PlanT,
+        PlanT(..),
         Plan,
 
         await,
@@ -92,6 +94,8 @@ import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.State
+import Control.Monad.Reader
+import Control.Monad.Error
 import Control.Monad.Writer hiding ((<>))
 import Control.Monad.Identity
 import Control.Applicative
@@ -435,7 +439,7 @@ instance
 
 
 -- | Signals that can be absent(`NoEvent`) or end.
--- For composite structure, `collapse` can be defined as monoidal sum of all member occasionals.
+-- For composite structure, `collapse` can be defined as monoid sum of all member occasionals.
 class 
     Occasional' a
   where
@@ -540,26 +544,54 @@ instance (Functor (PlanF i o)) where
   fmap g (YieldPF x r) = YieldPF x (g r)
   fmap _ StopPF = StopPF
 
-
-type PlanT i o m a = F.FT (PlanF i o) m a
+newtype PlanT i o m a =
+    PlanT { freePlanT :: F.FT (PlanF i o) m a }
+  deriving
+    (Functor, Applicative, Monad, MonadTrans,
+     Alternative)
+    -- , MonadError, MonadReader, MonadCatch, MonadThrow, MonadIO, MonadCont
 type Plan i o a = forall m. Monad m => PlanT i o m a
 
+instance
+    MonadReader r m => MonadReader r (PlanT i o m)
+  where
+    ask = PlanT ask
+    local f (PlanT pl) = PlanT $ local f pl
+
+instance
+    MonadWriter w m => MonadWriter w (PlanT i o m)
+  where
+    tell = PlanT . tell
+    listen = PlanT . listen . freePlanT
+    pass = PlanT . pass . freePlanT
+
+instance
+    MonadState s m => MonadState s (PlanT i o m)
+  where
+    get = PlanT get
+    put = PlanT . put
+
+instance
+    Monad m => MonadPlus (PlanT i o m)
+  where
+    mzero = stop
+    mplus = catchP
 
 yield :: o -> Plan i o ()
-yield x = F.liftF $ YieldPF x ()
+yield x = PlanT . F.liftF $ YieldPF x ()
 
 await :: Plan i o i
-await = F.FT $ \pr free -> free id (AwaitPF pr (free pr StopPF))
+await = PlanT $ F.FT $ \pr free -> free id (AwaitPF pr (free pr StopPF))
 
 stop :: Plan i o a
-stop = F.liftF $ StopPF
+stop = PlanT $ F.liftF $ StopPF
 
 
 catchP:: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
 
-catchP pl cont0 = 
-    F.FT $ \pr free ->
+catchP (PlanT pl) cont0 = 
+    PlanT $ F.FT $ \pr free ->
         F.runFT
             pl
             (pr' pr)
@@ -575,9 +607,9 @@ catchP pl cont0 =
         (y -> m r) ->
         (PlanF i o y) ->
         m r
-    free' cont pr free _ StopPF =
+    free' (PlanT cont) pr free _ StopPF =
         F.runFT cont pr free
-    free' cont pr free r (AwaitPF f ff) =
+    free' (PlanT cont) pr free r (AwaitPF f ff) =
         free
             (either (\_ -> F.runFT cont pr free) r)
             (AwaitPF (Right . f) (Left ff))
@@ -601,7 +633,7 @@ constructT' ::
     (forall b. m b -> a () b) ->
     PlanT i o m r -> 
     ProcessA a (Event i) (Event o)
-constructT' fit0 pl0 = prependProc $ F.runFT pl0 pr free
+constructT' fit0 (PlanT pl0) = prependProc $ F.runFT pl0 pr free
   where
     fit' :: (b -> m c) -> a b c
     fit' fmy = proc x -> fit0 (fmy x) -<< ()
