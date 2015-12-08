@@ -1,4 +1,4 @@
-
+{-# LANGUAGE Safe #-}
 
 module
     Control.Arrow.Machine.Misc.Exception

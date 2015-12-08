@@ -1,3 +1,4 @@
+{-# LANGUAGE Trustworthy #-} -- Safe if eliminate GeneralizedNewtypeInstance
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -572,7 +573,7 @@ instance
     put = PlanT . put
 
 instance
-    Monad m => MonadPlus (PlanT i o m)
+    (Monad m, Alternative m) => MonadPlus (PlanT i o m)
   where
     mzero = stop
     mplus = catchP
