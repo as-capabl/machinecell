@@ -96,7 +96,6 @@ import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.State
 import Control.Monad.Reader
-import Control.Monad.Error
 import Control.Monad.Writer hiding ((<>))
 import Control.Monad.Identity
 import Control.Applicative
@@ -139,7 +138,7 @@ type ProcType a b c = ProcessA a b c
 data ProcessA a b c = ProcessA {
     feed :: a b (c, ProcessA a b c),
     sweep :: a b (Maybe c, ProcessA a b c),
-    suspend :: b -> c
+    suspend :: !(b -> c)
   }
 
 
