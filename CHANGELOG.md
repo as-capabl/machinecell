@@ -1,4 +1,18 @@
 
+3.0.0
+-----------
+* ArrowLoop instance now independent of base arrow's
+* Make PlanT newtype and add stop handling MonadPlus instance
+* API changes
+    * Added `filterJust`, `filterLeft`, `filterRight`
+    * Deleted Show and Eq instance of Event type
+    * Added Isos of ArrowUtil module
+    * Delete state monad handling.
+    * Delete unsafe primitives `cycleDelay`, `fitEx`, `unsafeSteady`, `loop'`
+    * Delete deperecated `passRecent`, `withRecent`
+    * Delete ProcessA ArrowReader instance and added `readerProc`
+
+
 2.1.0
 -----------
 * Added `dHold`, `dAccum`.
