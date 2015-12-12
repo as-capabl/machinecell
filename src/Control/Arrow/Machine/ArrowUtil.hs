@@ -1,8 +1,12 @@
-{-# LANGUAGE Safe #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE Arrows #-}
 
+#if __GLASGOW_HASKELL__ >= 708
+{-# LANGUAGE Safe #-}
+#else
+{-# LANGUAGE Trustworthy #-}
+#endif
 
 -- | Arrow utilities not related to machinecell library.
 module

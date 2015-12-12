@@ -1,10 +1,16 @@
-{-# LANGUAGE Safe #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+
+#if __GLASGOW_HASKELL__ >= 708
+{-# LANGUAGE Safe #-}
+#else
+{-# LANGUAGE Trustworthy #-}
+#endif
 
 module
     Control.Arrow.Machine.Utils
