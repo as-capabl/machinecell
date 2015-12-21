@@ -1,6 +1,7 @@
 {-# LANGUAGE Trustworthy #-} -- Safe if eliminate GeneralizedNewtypeInstance
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -180,7 +181,7 @@ makePA ::
         a b (f c, ProcessA a b c)) ->
     (b -> c) ->
     ProcessA a b c
-makePA h sus = ProcessA {
+makePA h !sus = ProcessA {
     feed = h >>> first (arr runIdentity),
     sweep = h,
     suspend = sus
@@ -707,26 +708,22 @@ repeatedly pl = construct $ forever pl
 --
 -- Switches
 --
-switchCore ::
-    (Arrow cat, Arrow a2, Arrow cat1, Occasional t3) =>
-    (t4
-     -> a2 (t5, (t6, c1)) c1
-     -> (t -> t1 -> cat a (t2, t3))
-     -> cat1 a1 (c, b))
-     -> t4 -> (t1 -> cat a t2) -> cat1 a1 c
-
-switchCore sw cur cont = sw cur (arr test) cont' >>> arr fst
-  where
-    test (_, (_, evt)) = evt
-    cont' _ t = cont t >>> arr (\y -> (y, noEvent))
-
 switch :: 
     ArrowApply a => 
     ProcessA a b (c, Event t) -> 
     (t -> ProcessA a b c) ->
     ProcessA a b c
-
-switch = switchCore kSwitch
+switch sf k = makePA
+    (proc x ->
+      do
+        (hy, sf') <- step sf -< x
+        let hevt = fmap snd hy
+        (case (helperToMaybe hevt)
+          of
+            Just (Event t) -> step (k t)
+            _ -> arr $ const (fst <$> hy, switch sf' k))
+                -<< x)
+    (fst . suspend sf)
 
 
 dSwitch :: 
@@ -734,8 +731,18 @@ dSwitch ::
     ProcessA a b (c, Event t) -> 
     (t -> ProcessA a b c) ->
     ProcessA a b c
-
-dSwitch = switchCore dkSwitch
+dSwitch sf k = makePA
+    (proc x ->
+      do
+        (hyevt, sf') <- step sf -< x
+        let hevt = fmap snd hyevt
+            hy = fmap fst hyevt
+        (case (helperToMaybe hevt)
+          of
+            Just (Event t) -> arr $ const (hy, k t)
+            _ -> arr $ const (hy, dSwitch sf' k))
+                -<< x)
+    (fst . suspend sf)
 
 
 rSwitch :: 

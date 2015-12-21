@@ -45,14 +45,6 @@ forkOf ::
     Fold s b -> ProcessA a (Event s) (Event b)
 forkOf fd = repeatedly $ await >>= mapMOf_ fd yield
 
-dAccum' ::
-    ArrowApply a => b -> ProcessA a (Event (b->b)) b
-dAccum' !x =
-    dkSwitch
-        (pure x)
-        (arr $ \(evf, _) -> ($ x) <$> evf)
-        (\_ x' -> dAccum' x')
-
 --
 -- Program
 --
@@ -67,7 +59,7 @@ mainArrow file = proc start ->
     -- Remember depth
     beginElem <- forkOf _EventBeginElement -< parseEvents
     endElem <- forkOf _EventEndElement -< parseEvents
-    depth <- dAccum' (0::Int) <<< Mc.gather -< [(+1) <$ beginElem, (\x->x-1) <$ endElem]
+    depth <- Mc.dAccum (0::Int) <<< Mc.gather -< [(+1) <$ beginElem, (\x->x-1) <$ endElem]
     
     -- output tag name at the depth
     let tagName = XML.nameLocalName . fst <$> beginElem
