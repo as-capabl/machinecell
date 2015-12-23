@@ -1,3 +1,6 @@
+3.0.1
+-----------
+* Fix performance issue of switch, dSwitch, accum, dAccum.
 
 3.0.0
 -----------
