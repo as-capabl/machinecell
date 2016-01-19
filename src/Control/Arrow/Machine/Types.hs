@@ -91,7 +91,6 @@ module
 where
 
 import qualified Control.Category as Cat
-import Data.Profunctor (Profunctor, dimap, rmap)
 import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
@@ -115,8 +114,8 @@ import GHC.Exts (build)
 -- Once a value `Feed`ed, the machine is `Sweep`ed until it `Suspend`s.
 data Phase = Feed | Sweep | Suspend deriving (Eq, Show)
 
-instance 
-    Monoid Phase 
+instance
+    Monoid Phase
   where
     mempty = Sweep
 
@@ -150,7 +149,7 @@ class
     step :: ArrowApply a => ProcessA a b c -> a b (f c, ProcessA a b c)
     helperToMaybe :: f a -> Maybe a
     weakly :: a -> f a
-  
+
     step' :: ArrowApply a => ProcessA a b c -> a (f b) (f c, ProcessA a b c)
     step' pa = proc hx ->
       do
@@ -186,12 +185,12 @@ makePA h !sus = ProcessA {
     sweep = h,
     suspend = sus
   }
-            
-       
+
+
 -- |Natural transformation
 fit ::
-    (ArrowApply a, ArrowApply a') => 
-    (forall p q. a p q -> a' p q) -> 
+    (ArrowApply a, ArrowApply a') =>
+    (forall p q. a p q -> a' p q) ->
     ProcessA a b c -> ProcessA a' b c
 fit f pa =
     arr Identity >>>
@@ -209,19 +208,13 @@ fitW extr f pa = makePA
     (extr >>> suspend pa)
 
 
-instance
-    ArrowApply a => Profunctor (ProcessA a)
-  where
-    dimap = dimapProc
-    {-# INLINE dimap #-}
-
 dimapProc ::
     ArrowApply a => 
     (b->c)->(d->e)->
     ProcType a c d -> ProcType a b e
 dimapProc f g pa = makePA
     (arr f >>> step pa >>> (arr (fmap g) *** arr (dimapProc f g)))
-    (dimap f g (suspend pa))
+    (g . (suspend pa) . f)
 
 {-# NOINLINE dimapProc #-}
 
@@ -229,7 +222,7 @@ dimapProc f g pa = makePA
 instance
     ArrowApply a => Functor (ProcessA a i)
   where
-    fmap = rmap
+    fmap = dimapProc id
 
 instance
     ArrowApply a => Applicative (ProcessA a i)

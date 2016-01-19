@@ -1,5 +1,5 @@
 name:                machinecell
-version:             3.0.1
+version:             3.0.2
 synopsis:            Arrow based stream transducers
 license:             BSD3
 license-file:        LICENSE
@@ -22,6 +22,12 @@ description:
 	.
 	A quick introduction is available in the Control.Arrow.Machine documentation.
 
+flag arrow-tr
+  description:
+    Arrow transformer support.
+  default: True
+  manual: True
+
 library
   exposed-modules:
         Control.Arrow.Machine,
@@ -33,9 +39,12 @@ library
         Control.Arrow.Machine.Misc.Discrete
   other-extensions:    FlexibleInstances, Arrows, RankNTypes, TypeSynonymInstances, MultiParamTypeClasses, GADTs, FlexibleContexts, NoMonomorphismRestriction, RecursiveDo
   ghc-options: -Wall
-  build-depends:       base >=4.0 && <5.0, mtl >=2.0.1.1, free >=4.12 && < 5.0, profunctors >=4.0, arrows >=0.4.1.2, semigroups >=0.8.3.1
+  build-depends:       base >=4.0 && <5.0, mtl >=2.0.1.1, free >=4.12 && < 5.0, semigroups >=0.8.3.1, profunctors >=4.0
   hs-source-dirs:      src
   default-language:    Haskell2010
+
+  if flag(arrow-tr)
+    build-depends:    arrow >= 0.4.1.2
 
 Test-suite spec
   type:                exitcode-stdio-1.0

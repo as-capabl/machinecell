@@ -50,9 +50,6 @@ module
         parB,
         now,
         onEnd,
-    
-        -- * Transformer
-        readerProc
        )
 where
 
@@ -65,7 +62,6 @@ import Control.Monad.Trans
 import Control.Monad.State
 import Control.Arrow
 import Control.Applicative
-import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
 
 import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
@@ -232,13 +228,3 @@ onEnd = arr collapse >>> go
     go = repeatedly $
         await `catchP` (yield () >> stop)
 
--- | Run reader of base arrow.
-readerProc ::
-    (ArrowApply a, ArrowApply a', ArrowAddReader r a a') =>
-    ProcessA a b c ->
-    ProcessA a' (b, r) c
-readerProc pa = arr swap >>> fitW snd (\ar -> arr swap >>> elimReader ar) pa
-  where
-    swap :: (a, b) -> (b, a)
-    swap ~(a, b) = (b, a)
-    
