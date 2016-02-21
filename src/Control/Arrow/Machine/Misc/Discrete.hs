@@ -13,7 +13,7 @@ module
         T(),
         updates,
         value,
-        
+
         arr,
         arr2,
         arr3,
@@ -24,10 +24,15 @@ module
         hold,
         accum,
         fromEq,
-        
+
         edge,
         asUpdater,
-        Alg
+        kSwitch,
+        dkSwitch,
+        refer,
+
+        Alg,
+        eval
       )
 where
 
@@ -48,6 +53,16 @@ makeT ::
     ArrowApply a =>
     P.ProcessA a (P.Event (), b) (T b)
 makeT = Arr.arr $ uncurry T
+
+-- TODO this should be implemented by switch
+rising ::
+    ArrowApply a =>
+    P.ProcessA a b (T c) ->
+    P.ProcessA a b (T c)
+rising sf = proc x ->
+  do
+    (dy, n) <- sf &&& P.now -< x
+    makeT -< (updates dy `mappend` n, value dy)
 
 arr ::
     ArrowApply a =>
@@ -138,8 +153,30 @@ asUpdater ::
 asUpdater ar = edge >>> P.anytime ar
 
 
+kSwitch ::
+    ArrowApply a =>
+    P.ProcessA a b (T c) ->
+    P.ProcessA a (b, T c) (P.Event t) ->
+    (P.ProcessA a b (T c) -> t -> P.ProcessA a b (T c)) ->
+    P.ProcessA a b (T c)
+kSwitch sf test k = P.kSwitch sf test (\sf' x -> rising (k sf' x))
 
-newtype Alg a i o = Alg { eval :: P.ProcessA a i (T o) }
+dkSwitch ::
+    ArrowApply a =>
+    P.ProcessA a b (T c) ->
+    P.ProcessA a (b, T c) (P.Event t) ->
+    (P.ProcessA a b (T c) -> t -> P.ProcessA a b (T c)) ->
+    P.ProcessA a b (T c)
+dkSwitch sf test k = P.dkSwitch sf test (\sf' x -> rising (k sf' x))
+
+
+newtype Alg a i o =
+    Alg { eval :: P.ProcessA a i (T o) }
+
+refer ::
+    ArrowApply a =>
+    (e -> T b) -> Alg a e b
+refer = Alg . Arr.arr
 
 instance
     ArrowApply a => Functor (Alg a i)
@@ -151,3 +188,15 @@ instance
   where
     pure = Alg . constant
     af <*> aa = Alg $ (eval af &&& eval aa) >>> arr2 ($)
+
+instance
+    (ArrowApply a, Num o) =>
+    Num (Alg a i o)
+  where
+    abs = fmap abs
+    signum = fmap signum
+    fromInteger = pure . fromInteger
+    (+) = liftA2 (+)
+    (-) = liftA2 (-)
+    (*) = liftA2 (*)
+
