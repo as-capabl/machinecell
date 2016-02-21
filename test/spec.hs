@@ -10,9 +10,9 @@ module
     Main
 where
 
-import Prelude hiding (filter)
 import Data.Maybe (fromMaybe)
-import Control.Arrow.Machine as P
+import qualified Control.Arrow.Machine as P
+import Control.Arrow.Machine hiding (filter, source)
 import Control.Applicative ((<$>), (<*>), (<$))
 import qualified Control.Category as Cat
 import Control.Arrow
@@ -30,8 +30,8 @@ runKI a x = runIdentity (runKleisli a x)
 
 
 
-main = hspec $ 
-  do 
+main = hspec $
+  do
     basics
     rules
     loops
@@ -39,6 +39,7 @@ main = hspec $
     plans
     utility
     switches
+    source
     execution
     loopUtil
 
@@ -62,7 +63,7 @@ basics =
 
         let
             -- 入力1度につき同じ値を2回出力する
-            doubler = repeatedly $ 
+            doubler = repeatedly $
                       do {x <- await; yield x; yield x}
             -- 入力値をStateのリストの先頭にPushする副作用を行い、同じ値を出力する
             pusher = repeatedlyT (Kleisli . const) $
@@ -96,7 +97,7 @@ basics =
         it "never spoils any FEED" $
           let
               counter = construct $ counterDo 1
-              counterDo n = 
+              counterDo n =
                 do
                   x <- await
                   yield $ n * 100 + x
@@ -110,7 +111,7 @@ basics =
               split2' = fmap fst &&& fmap snd
               gen = arr (fmap $ \x -> [x, x]) >>> fork >>> arr split2'
               r1 = runKI (run (gen >>> arr fst)) (l::[(Int, [Int])])
-              r2 = runKI (run (gen >>> second (fork >>> echo) >>> arr fst)) 
+              r2 = runKI (run (gen >>> second (fork >>> echo) >>> arr fst))
                    (l::[(Int, [Int])])
             in
               r1 == r2
@@ -119,7 +120,7 @@ basics =
 rules =
   do
     describe "ProcessA as Category" $
-      do        
+      do
         prop "has asocciative composition" $ \fx gx hx cond ->
           let
               f = mkProc fx
@@ -138,7 +139,7 @@ rules =
               (f >>> g) `equiv` (f >>> Cat.id >>> g)
 
     describe "ProcessA as Arrow" $
-      do        
+      do
         it "can be made from pure function(arr)" $
           do
             (run . arr . fmap $ (+ 2)) [1, 2, 3]
@@ -156,7 +157,7 @@ rules =
           do
             pendingWith "to correct"
 {-
-            let 
+            let
                 myProc2 = repeatedlyT (Kleisli . const) $
                   do
                     x <- await
@@ -171,10 +172,10 @@ rules =
 
                 (result, state) =
                     stateProc (arr de >>> first myProc2 >>> arr en) l
-                                  
-            (result >>= maybe mzero return . fst) 
+
+            (result >>= maybe mzero return . fst)
                 `shouldBe` [1,2,2,3,3,3]
-            (result >>= maybe mzero return . snd) 
+            (result >>= maybe mzero return . snd)
                 `shouldBe` [1,2,3]
             state `shouldBe` [1,2,3]
 -}
@@ -191,7 +192,7 @@ rules =
           let
               f = first $ mkProc fx
               g = second (arr $ fmap (+2))
-              
+
               equiv = mkEquivTest2 cond
             in
               (f >>> g) `equiv` (g >>> f)
@@ -253,7 +254,7 @@ loops =
                     rec r <- dHold True -< False <$ ev2
                         ev2 <- fork -< [(), ()] <$ ev
                     returnA -< r <$ ev
-            run pa [1, 2, 3] `shouldBe` [True, True, True] 
+            run pa [1, 2, 3] `shouldBe` [True, True, True]
 
 
     describe "Rules for ArrowLoop" $
@@ -292,8 +293,8 @@ choice =
                 aj1 = arr Right
                 aj2 = arr $ either id id
                 l = [1]
-                r1 = stateProc 
-                       (aj1 >>> left af >>> aj2) 
+                r1 = stateProc
+                       (aj1 >>> left af >>> aj2)
                        l
               in
                 r1 `shouldBe` ([1],[])
@@ -302,7 +303,7 @@ choice =
             let
                 f = mkProc fx
                 g = mkProc gx
-                
+
                 equiv = mkEquivTest cond
                     ::(MyTestT (Either (Event Int) (Event Int))
                                (Either (Event Int) (Event Int)))
@@ -312,7 +313,7 @@ choice =
 
 plans = describe "Plan" $
   do
-    let pl = 
+    let pl =
           do
             x <- await
             yield x
@@ -324,7 +325,7 @@ plans = describe "Plan" $
 
     it "can be constructed into ProcessA" $
       do
-        let 
+        let
             result = run (construct pl) l
         result `shouldBe` [2, 3, 5, 6]
 
@@ -364,7 +365,7 @@ utility =
       do
         it "acts like fold." $
           do
-            let 
+            let
                 pa = proc evx ->
                   do
                     val <- accum 0 -< (+1) <$ evx
@@ -376,7 +377,7 @@ utility =
       do
         it "fires only once at the end of a stream." $
           do
-            let 
+            let
                 pa = proc evx ->
                   do
                     x <- hold 0 -< evx
@@ -391,7 +392,7 @@ utility =
             let
                 pa = proc x ->
                   do
-                    r1 <- filter $ arr (\x -> x `mod` 3 == 0) -< x
+                    r1 <- P.filter $ arr (\x -> x `mod` 3 == 0) -< x
                     r2 <- stopped -< x::Event Int
                     r3 <- returnA -< r2
                     fin <- gather -< [r1, r2, r3]
@@ -399,7 +400,7 @@ utility =
                     end <- onEnd -< fin
                     returnA -< val <$ end
             run pa [1, 2, 3, 4, 5] `shouldBe` ([3]::[Int])
-                    
+
 
 switches =
   do
@@ -407,8 +408,8 @@ switches =
       do
         it "switches once" $
           do
-            let 
-                before = proc evx -> 
+            let
+                before = proc evx ->
                   do
                     ch <- P.filter (arr $ (\x -> x `mod` 2 == 0)) -< evx
                     returnA -< (noEvent, ch)
@@ -448,12 +449,65 @@ switches =
 
             ret `shouldBe` [7, 2, 6, 18, 21]
             retD `shouldBe` [7, 3, 6, 12, 21]
+    describe "kSwitch" $
+      do
+        it "switches spontaneously" $
+          do
+            let
+                oneshot x = pure () >>> blockingSource [x]
+                theArrow sw = sw (oneshot False) (arr snd) $ \_ _ -> oneshot True
+            run (theArrow kSwitch) [] `shouldBe` [True]
+            run (theArrow dkSwitch) [] `shouldBe` [False, True]
+
+ source =
+  do
+    describe "source" $
+      do
+        it "provides interleaved source stream" $
+          do
+            let
+                pa = proc cl ->
+                  do
+                    s1 <- P.source [1, 2, 3] -< cl
+                    s2 <- P.source [4, 5, 6] -< cl
+                    P.gather -< [s1, s2]
+            P.run pa (repeat ()) `shouldBe` [1, 4, 2, 5, 3, 6]
+    describe "blockingSource" $
+      do
+        it "provides blocking source stream" $
+          do
+            let
+                pa = proc _ ->
+                  do
+                    s1 <- P.blockingSource [1, 2, 3] -< ()
+                    s2 <- P.blockingSource [4, 5, 6] -< ()
+                    P.gather -< [s1, s2]
+            P.run pa (repeat ()) `shouldBe` [4, 5, 6, 1, 2, 3]
+
+    describe "source and blockingSource" $
+      do
+        prop "[interleave blockingSource = source]" $ \l cond ->
+            let
+                _ = l::[Int]
+                equiv = mkEquivTest cond
+                    ::(MyTestT (Event Int) (Event Int))
+              in
+                P.source l `equiv` P.interleave (P.blockingSource l)
+
+        prop "[blocking source = blockingSource]" $ \l cond ->
+            let
+                _ = l::[Int]
+                equiv = mkEquivTest cond
+                    ::(MyTestT (Event Int) (Event Int))
+              in
+                (pure () >>> P.blockingSource l)
+                    `equiv` (pure () >>> P.blocking (P.source l))
 
 
 execution = describe "Execution of ProcessA" $
     do
       let
-          pl = 
+          pl =
             do
               x <- await
               yield x
@@ -481,25 +535,25 @@ execution = describe "Execution of ProcessA" $
           yields ret `shouldBe` ([]::[Int])
           hasStopped ret `shouldBe` True
 
-      it "supports step execution (2)" $ 
+      it "supports step execution (2)" $
           pendingWith "Correct stop handling"
 {-
       prop "supports step execution (2)" $ \p l ->
           let
               pa = mkProc p
-              all pc (x:xs) ys = 
+              all pc (x:xs) ys =
                 do
                   (r, cont) <- runKleisli (stepRun pc) x
                   all cont (if hasStopped r then [] else xs) (ys ++ yields r)
               all pc [] ys = runKleisli (run pc) [] >>= return . (ys++)
             in
               runState (all pa (l::[Int]) []) [] == stateProc pa l
--}          
+-}
 
       it "supports yield-driven step" $
         do
           let
-              init = construct $ 
+              init = construct $
                 do
                   yield (-1)
                   x <- await

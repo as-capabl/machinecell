@@ -24,7 +24,7 @@ module
 
         -- * Switches
         -- | Switches inspired by Yampa library.
-        -- Signature is almost same, but collection requirement is  not only 'Functor', 
+        -- Signature is almost same, but collection requirement is  not only 'Functor',
         -- but 'Tv.Traversable'. This is because of side effects.
         switch,
         dSwitch,
@@ -37,11 +37,16 @@ module
         rpSwitch,
         rpSwitchB,
 
+        -- * Sources
+        -- $sources
+        source,
+        blockingSource,
+        interleave,
+        blocking,
+
         -- * Other utility arrows
         tee,
         gather,
-        sample,
-        source,
         fork,
         filter,
         echo,
@@ -50,10 +55,10 @@ module
         parB,
         now,
         onEnd,
-    
+
         -- * Transformer
         readerProc
-       )
+     )
 where
 
 import Prelude hiding (filter)
@@ -74,15 +79,15 @@ import Control.Arrow.Machine.Types
 
 
 
-hold :: 
+hold ::
     ArrowApply a => b -> ProcessA a (Event b) b
-hold old = proc evx -> 
+hold old = proc evx ->
   do
     rSwitch (pure old) -< ((), pure <$> evx)
 
-dHold :: 
+dHold ::
     ArrowApply a => b -> ProcessA a (Event b) b
-dHold old = proc evx -> 
+dHold old = proc evx ->
   do
     drSwitch (pure old) -< ((), pure <$> evx)
 
@@ -97,7 +102,7 @@ dAccum ::
 dAccum x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 
 
-edge :: 
+edge ::
     (ArrowApply a, Eq b) =>
     ProcessA a b (Event b)
 edge = proc x ->
@@ -110,62 +115,76 @@ edge = proc x ->
     judge (prv, x) = if prv == Just x then Nothing else Just x
 
 
-
+-- &sources
+-- In addition to the main event stream privided by `run`,
+-- there are two other ways to provide additional input streams,
+-- "interleaved" sources and "blocking" sources.
 --
--- other utility arrow
+-- Interleaved sources are actually Event -> Event transformers
+-- that don't see the values of the input events.
+-- They discard input values and emit their values according to input event timing.
+--
+-- Blocking sources emit their events independent from upstream.
+-- Until they exhaust their values, they block upstream transducers.
+--
+-- Here is a demonstration of two kind of sources.
+--
+-- @
+-- a = proc x ->
+--   do
+--     y1 <- source [1, 2, 3] -< x
+--     y2 <- source [4, 5, 6] -< x
+--
+--     gather -< [y1, y2]
+-- -- run a (repeat ()) => [1, 4, 2, 5, 3, 6]
+--
+-- b = proc _ ->
+--   do
+--     y1 <- blockingSource [1, 2, 3] -< ()
+--     y2 <- blockingSource [4, 5, 6] -< ()
+--
+--     gather -< [y1, y2]
+-- -- run b [] => [4, 5, 6, 1, 2, 3]
+-- @
+--
+-- In above code, you'll see that output values of `source`
+-- (an interleaved source) are actually interelaved,
+-- while `blockingSource` blocks another upstream source.
+--
+-- And they can both implemented using `PlanT`.
+-- The only one deference is `await` call to listen upstream event timing.
+--
+-- An example is follows.
+--
+-- @
+-- interleavedStdin = constructT kleisli0 (forever pl)
+--   where
+--     pl =
+--       do
+--         _ <- await
+--         eof <- isEOF
+--         if isEOF then stop else return()
+--         getLine >>= yield
+--
+-- blockingStdin = pure noEvent >>> constructT kleisli0 (forever pl)
+--   where
+--     pl =
+--       do
+--         -- No await here
+--         eof <- isEOF
+--         if isEOF then stop else return()
+--         getLine >>= yield
+-- @
 
--- |Make two event streams into one.
--- Actually `gather` is more general and convenient;
--- 
--- @... \<- tee -\< (e1, e2)@
--- 
--- is equivalent to
--- 
--- @... \<- gather -\< [Left \<$\> e1, Right \<$\> e2]@
--- 
-tee ::
-    ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
-tee = proc (e1, e2) -> gather -< [Left <$> e1, Right <$> e2]
 
-
-
-sample ::
-    ArrowApply a =>
-    ProcessA a (Event b1, Event b2) [b1]
-{-
-sample = join >>> construct (go id) >>> hold []
-  where
-    go l = 
-      do
-        (evx, evy) <- await `catch` return (NoEvent, End)
-        let l2 = evMaybe l (\x -> l . (x:)) evx
-        if isEnd evy
-          then
-          do
-            yield $ l2 []
-            stop
-          else
-            return ()
-        evMaybe (go l2) (\_ -> yield (l2 []) >> go id) evy
--}
-sample = undefined
-
--- |Make multiple event channels into one.
--- If simultaneous events are given, lefter one is emitted earlier.
-gather ::
-    (ArrowApply a, Fd.Foldable f) =>
-    ProcessA a (f (Event b)) (Event b)
-gather = arr (Fd.foldMap $ fmap singleton) >>> fork
-  where
-    singleton x = x NonEmpty.:| []
 
 -- | Provides a source event stream.
 -- A dummy input event stream is needed.
---   
+--
 -- @
 --   run af [...]
 -- @
---   
+--
 -- is equivalent to
 --
 -- @
@@ -178,16 +197,84 @@ source l = construct $ Fd.mapM_ yd l
   where
     yd x = await >> yield x
 
+-- | Provides a blocking event stream.
+blockingSource ::
+    (ArrowApply a, Fd.Foldable f) =>
+    f c -> ProcessA a () (Event c)
+blockingSource l = pure noEvent >>> construct (Fd.mapM_ yield l)
+
+interleave ::
+    ArrowApply a =>
+    ProcessA a () (Event c) ->
+    ProcessA a (Event b) (Event c)
+interleave bs0 = sweep1 (pure () >>> bs0)
+  where
+    waiting bs r =
+        dSwitch
+            (handler bs r)
+            sweep1
+    sweep1 bs =
+        kSwitch
+            bs
+            (arr snd)
+            waiting
+    handler bs r = proc ev ->
+      do
+        ev' <- splitter bs r -< ev
+        returnA -< (filterJust (fst <$> ev'), snd <$> ev')
+    splitter bs r =
+        construct $
+          do
+            _ <- await
+            yield (Just r, bs)
+          `catchP`
+            yield (Nothing, bs >>> muted)
+
+blocking ::
+    ArrowApply a =>
+    ProcessA a (Event ()) (Event c) ->
+    ProcessA a () (Event c)
+blocking is = dSwitch (blockingSource (repeat ()) >>> is >>> (Cat.id &&& onEnd)) (const stopped)
+
+
+--
+-- other utility arrow
+
+-- |Make two event streams into one.
+-- Actually `gather` is more general and convenient;
+--
+-- @... \<- tee -\< (e1, e2)@
+--
+-- is equivalent to
+--
+-- @... \<- gather -\< [Left \<$\> e1, Right \<$\> e2]@
+--
+tee ::
+    ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
+tee = proc (e1, e2) -> gather -< [Left <$> e1, Right <$> e2]
+
+
+
+-- |Make multiple event channels into one.
+-- If simultaneous events are given, lefter one is emitted earlier.
+gather ::
+    (ArrowApply a, Fd.Foldable f) =>
+    ProcessA a (f (Event b)) (Event b)
+gather = arr (Fd.foldMap $ fmap singleton) >>> fork
+  where
+    singleton x = x NonEmpty.:| []
+
+
 -- |Given an array-valued event and emit it's values as inidvidual events.
 fork ::
     (ArrowApply a, Fd.Foldable f) =>
     ProcessA a (Event (f b)) (Event b)
 
-fork = repeatedly $ 
+fork = repeatedly $
     await >>= Fd.mapM_ yield
 
 -- |Executes an action once per an input event is provided.
-anytime :: 
+anytime ::
     ArrowApply a =>
     a b c ->
     ProcessA a (Event b) (Event c)
@@ -210,7 +297,7 @@ filter cond = repeatedlyT (ary0 unArrowMonad) $
     if b then yield x else return ()
 
 
-echo :: 
+echo ::
     ArrowApply a =>
     ProcessA a (Event b) (Event b)
 
@@ -241,4 +328,4 @@ readerProc pa = arr swap >>> fitW snd (\ar -> arr swap >>> elimReader ar) pa
   where
     swap :: (a, b) -> (b, a)
     swap ~(a, b) = (b, a)
-    
+
