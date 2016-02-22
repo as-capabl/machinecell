@@ -175,7 +175,10 @@ edge = proc x ->
 --         if isEOF then stop else return()
 --         getLine >>= yield
 -- @
-
+--
+-- They are different in the end behavior.
+-- When upstream stops, an interleaved source stops because await call fails.
+-- But a blocking source don't stop until its own termination.
 
 
 -- | Provides a source event stream.
@@ -203,6 +206,7 @@ blockingSource ::
     f c -> ProcessA a () (Event c)
 blockingSource l = pure noEvent >>> construct (Fd.mapM_ yield l)
 
+-- | Make a blocking source interleaved.
 interleave ::
     ArrowApply a =>
     ProcessA a () (Event c) ->
@@ -230,6 +234,7 @@ interleave bs0 = sweep1 (pure () >>> bs0)
           `catchP`
             yield (Nothing, bs >>> muted)
 
+-- | Make an interleaved source blocking.
 blocking ::
     ArrowApply a =>
     ProcessA a (Event ()) (Event c) ->

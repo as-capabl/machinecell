@@ -15,7 +15,7 @@ module
       (
         -- * Quick introduction
         -- $introduction
-        
+
         -- * Note
         -- $note
 
@@ -79,7 +79,7 @@ import Control.Arrow.Machine.Utils
 -- Then, resulting processes are composed as `Category` using `(\>\>\>)` operator.
 --
 -- @
--- source :: ProcessA (Kleisli IO) (Event ()) (Event String)  
+-- source :: ProcessA (Kleisli IO) (Event ()) (Event String)
 -- source = repeatedlyT kleisli0 $
 --   do
 --     _ \<- await
@@ -100,30 +100,41 @@ import Control.Arrow.Machine.Utils
 --     lift $ putStrLn x
 -- @
 --
--- >>> runKleisli (run_ $ source >>> pipe >>> sink) (repeat ())
+-- @
+-- runKleisli (run_ $ source >>> pipe >>> sink) (repeat ())
+-- @
 --
 -- The above code reads two lines from stdin, puts a concatenated line to stdout and finishes.
 --
--- Unlike other pipe libraries, even a source must call `await`.
---
+-- Unlike other pipe libraries, even the source calls `await`.
 -- The source awaits dummy input, namely "(repeat ())", and discard input values.
+--
 -- Even the input is an infinite list, this program stops when the "pipe" transducer stops.
 --
 -- == More details on finalizing
 --
 -- Finalizing behavior of transducers obey the following scenario.
--- 
+--
 -- 1. Signals of type `Event` can carry /end signs/.
 -- 2. Most transducers stop when they get an end sign.
 --    (Some exceptions can be made by `onEnd` or `catchP`)
 -- 3. If `run` function detects an end sign as an output of a running transducer,
 --    it stops feeding input values and alternatively feeds end signs.
 -- 4. Continue iteration until no more events can be occurred.
--- 
+--
 -- So "await \`catchP\` some_cleanup" can handle any stop of both upstream and downstream.
 --
 -- On the other hand, a plan never gets end sign without calling await.
--- That's why even sources must call await.
+--
+-- So it is better that even a source calls await.
+--
+-- A source that calls await periodically is an "interleaved source".
+-- Interleaved sources have a number of advantages.
+-- They can be controled their output timings by their upstream, or can be stopped any time.
+--
+-- There is another kind of source that doesn't call await, namely "blocking source".
+--
+-- see "sources" section of "Control.Arrow.Machine.Utils" documentation.
 --
 -- = Arrow composition
 --
@@ -162,7 +173,7 @@ import Control.Arrow.Machine.Utils
 -- The transducers we have already seen are all have input and output type wrapped by `Event`.
 -- We have not taken care of them so far because all of them are cancelled each other.
 --
--- But several built-in transducers provides non-event values like below.
+-- But several built-in transducers provide non-event values like below.
 --
 -- @
 -- hold :: ArrowApply a =\> b -\> ProcessA a (Event b) b
@@ -177,7 +188,7 @@ import Control.Arrow.Machine.Utils
 -- values that appear naked in arrow notations are /behaviour/,
 -- that means /coutinuous/ time-varying values,
 -- whereas /event/ values are /discrete/.
--- 
+--
 -- Note that all values that can be input, output, or taken effects must be discrete.
 --
 -- To use continuous values anyhow interacting the real world,
@@ -219,13 +230,13 @@ import Control.Arrow.Machine.Utils
 --     _ \<- fit arr f -\< x
 --     g -\< x
 -- @
--- 
+--
 -- Which is desugared to `f &&& g \>\>\> arr snd`. At least if `Event` constructor is exported,
 -- the proposition is falsible.
 -- When `f` is "arr (replicate k) \>\>\> fork" for some integer k and `g` is "arr (const $ Event ())",
 -- g yields ()s for k times. That is because, the result value of arrow "f &&& g" is
 -- nothing but "(Event x, Event ())" and its number of yields is k because "Event x" must
--- be yielded k times. 
+-- be yielded k times.
 --
 -- That's because `Event` constructor is hidden.
 -- Using primitives exported by this module, it works almost correctly.
@@ -245,10 +256,10 @@ import Control.Arrow.Machine.Utils
 -- the problem will be avoided.
 --
 -- = Looping
--- 
+--
 -- Although `ProcessA` is an instance of `ArrowLoop`,
 -- to send values to upstream, there is a little difficulties.
--- 
+--
 -- In example below, result is [0, 0, 0, 0], not [1, 2, 3, 4].
 --
 -- @
@@ -269,35 +280,6 @@ import Control.Arrow.Machine.Utils
 -- almost always `NoEvent`s.
 --
 -- A better way to send events to upstream is, to encode them to behaviours using `dHold`,
--- `dAccum`, and so on, then send to upstream in rec statement.
+-- `dAccum` and so on, then send to upstream in rec statement.
 --
--- = Unsafe primitives
---
--- In the code below, `edge` does not fire.
---
--- @
--- encloseState False (sta \>\>\> peekState) \>\>\> edge
--- @
---
--- where
---
--- @
--- sta = constructT (ary0 $ statefully unArrowMonad) (put True \>\> await \>\> put False)
--- @
---
--- That is because, when "put True" is executing, the backtracking is going up and never hits `edge`
--- until "put False" is executed.
---
--- The same occurs for "proc b -> if b then (now -< ()) else (returnA -< noEvent)" instead of `edge`.
---
--- Even worse, it again breaks the purity of `ProcessA`.
--- `await` gets `NoEvent` if some "arr (replicate k) \>\>\> fork" is inserted somewhere in upstream.
--- Then `edge` may fire because "put False" execution is delayed.
---
--- This means that, `encloseState`, `peekState`, `edge`, and `ArrowChoice` instance for `ProcessA`
--- should never be existed simultaneously.
---
--- Moreover, their primitives `unsafeSteady`, `unsafeExhaust`, `fitEx` are so.
---
--- But I hope some of them can be rescued. So for now, this library contains them all.
-       
+
