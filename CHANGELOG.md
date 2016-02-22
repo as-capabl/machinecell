@@ -1,3 +1,18 @@
+
+3.1.0
+-----------
+* Add `Discrete` utilities
+    * eval
+    * refer
+    * kSwitch
+    * dkSwitch
+    * Num instance definition
+* Add source utilitiess
+    * blockingSource
+    * interleave
+    * blocking
+* Aelete `sample`
+
 3.0.1
 -----------
 * Fix performance issue of switch, dSwitch, accum, dAccum.
