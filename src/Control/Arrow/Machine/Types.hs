@@ -161,11 +161,20 @@ class
             mx
                 -<< ()
 
-    testStep ::
+    testStep' ::
         ArrowApply a =>
-        ProcessA a b c ->
+        (x -> a b (f c, x)) ->
+        (x -> b -> c) ->
+        x ->
         ProcessA a (b, c) t ->
-        a b (f c, f t, ProcessA a b c, ProcessA a (b, c) t)
+        a b (f c, f t, x, ProcessA a (b, c) t)
+
+testStep ::
+    (ArrowApply a, ProcessHelper f) =>
+    ProcessA a b c ->
+    ProcessA a (b, c) t ->
+    a b (f c, f t, ProcessA a b c, ProcessA a (b, c) t)
+testStep = testStep' step suspend
 
 instance
     ProcessHelper Identity
@@ -173,9 +182,9 @@ instance
     step pa = feed pa >>> first (arr Identity)
     helperToMaybe = Just . runIdentity
     weakly = Identity
-    testStep sf test = proc x ->
+    testStep' stp' _ sf test = proc x ->
       do
-        (y, sf') <- feed sf -< x
+        (Identity y, sf') <- stp' sf -< x
         (t, test') <- feed test -< (x, y)
         returnA -< (return y, return t, sf', test')
 
@@ -185,9 +194,9 @@ instance
     step = sweep
     helperToMaybe = id
     weakly _ = Nothing
-    testStep sf0 test0 = proc x ->
+    testStep' stp' sus' sf0 test0 = proc x ->
       do
-        let y = suspend sf0 x
+        let y = sus' sf0 x
         (mt, test') <- sweep test0 -< (x, y)
         (case mt of
             Just t -> arr $ const (Just y, Just t, sf0, test')
@@ -196,7 +205,7 @@ instance
       where
         cont sf test = proc x ->
           do
-            (my, sf') <- sweep sf -< x
+            (my, sf') <- stp' sf -< x
             (case my of
                 Just y -> cont2 y sf' test
                 Nothing -> arr $ const (Nothing, Nothing, sf', test))
@@ -907,8 +916,8 @@ pSwitch ::
 pSwitch r sfs test k = makePA
     (proc x ->
       do
-        (hzs, sfs') <- parCore r sfs -<< x
-        (hevt, test') <- step' test -< (x,) <$> hzs
+        (hzs, hevt, sfs', test') <-
+            testStep' (parCore r) (suspendAll r) sfs test -< x
         (case helperToMaybe hevt
           of
             Just (Event t) -> (step (k sfs' t))

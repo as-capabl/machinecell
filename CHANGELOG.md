@@ -7,11 +7,14 @@
     * kSwitch
     * dkSwitch
     * Num instance definition
-* Add source utilitiess
+* Add source utilities
     * blockingSource
     * interleave
     * blocking
-* Aelete `sample`
+* Delete `sample`
+* Change a switching behavior. With previous implementation, a switching doesn't occur
+  when a runnning transducer emits a trigger event using `now` transducer.
+
 
 3.0.1
 -----------
