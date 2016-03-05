@@ -5,11 +5,16 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
+{-|
+Module :
+
+This module should be import manually.
+-}
+
 module
     Control.Arrow.Machine.Misc.Discrete
       (
-        -- *Discrete
-        -- | This module should be imported manually.
+        -- * Discrete type
         T(),
         updates,
         value,
@@ -29,10 +34,12 @@ module
         asUpdater,
         kSwitch,
         dkSwitch,
-        refer,
 
-        Alg,
-        eval
+        -- * Discrete algebra
+        -- &alg
+        Alg(Alg),
+        eval,
+        refer
       )
 where
 
@@ -44,6 +51,22 @@ import qualified Control.Arrow as Arr
 import qualified Control.Arrow.Machine as P
 import Data.Monoid (mconcat, mappend)
 
+{- &type
+This module provides an abstraction that continuous values with
+finite number of changing points.
+
+>>> import qualified Control.Arrow.Machine.Misc.Discrete as D
+>>> run (D.hold "apple" >>> D.arr reverse >>> D.edge) ["orange", "grape"]
+["elppa", "egnaro", "eparg"]
+
+In above example input data of "reverse" is continuous.
+But the "D.edge" transducer extracts changing points without calling string comparison.
+
+This is possible because the intermediate type `T` has the information of changes
+together with the value information.
+-}
+
+-- |The discrete signal type.
 data T a = T {
     updates :: (P.Event ()),
     value :: a
@@ -170,6 +193,28 @@ dkSwitch ::
 dkSwitch sf test k = P.dkSwitch sf test (\sf' x -> rising (k sf' x))
 
 
+{-&alg
+Calculations between discrete types.
+
+An example is below.
+
+@
+holdAdd ::
+    (ArrowApply a, Num b) =>
+    ProcessA a (Event b, Event b) (Discrete b)
+holdAdd = proc (evx, evy) ->
+  do
+    x <- D.hold 0 -< evx
+    y <- D.hold 0 -< evy
+    D.eval (refer fst + refer snd) -< (x, y)
+@
+
+The last line is equivalent to "arr2 (+) -< (x, y)".
+Using Alg, you can construct more general calculations
+between discrete signals.
+-}
+
+-- |Discrete algebra type.
 newtype Alg a i o =
     Alg { eval :: P.ProcessA a i (T o) }
 

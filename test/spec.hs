@@ -459,7 +459,7 @@ switches =
             run (theArrow kSwitch) [] `shouldBe` [True]
             run (theArrow dkSwitch) [] `shouldBe` [False, True]
 
- source =
+source =
   do
     describe "source" $
       do
