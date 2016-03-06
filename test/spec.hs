@@ -13,7 +13,7 @@ where
 import Data.Maybe (fromMaybe)
 import qualified Control.Arrow.Machine as P
 import Control.Arrow.Machine hiding (filter, source)
-import Control.Applicative ((<$>), (<*>), (<$))
+import Control.Applicative
 import qualified Control.Category as Cat
 import Control.Arrow
 import Control.Monad.State
