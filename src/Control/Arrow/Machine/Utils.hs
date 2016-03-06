@@ -39,6 +39,7 @@ module
 
         -- * Sources
         -- $sources
+
         source,
         blockingSource,
         interleave,
@@ -115,7 +116,7 @@ edge = proc x ->
     judge (prv, x) = if prv == Just x then Nothing else Just x
 
 
--- &sources
+-- $sources
 -- In addition to the main event stream privided by `run`,
 -- there are two other ways to provide additional input streams,
 -- "interleaved" sources and "blocking" sources.
@@ -154,7 +155,7 @@ edge = proc x ->
 -- And they can both implemented using `PlanT`.
 -- The only one deference is `await` call to listen upstream event timing.
 --
--- An example is follows.
+-- An example is below.
 --
 -- @
 -- interleavedStdin = constructT kleisli0 (forever pl)
@@ -178,7 +179,7 @@ edge = proc x ->
 --
 -- They are different in the end behavior.
 -- When upstream stops, an interleaved source stops because await call fails.
--- But a blocking source don't stop until its own termination.
+-- But a blocking source doesn't stop until its own termination.
 
 
 -- | Provides a source event stream.

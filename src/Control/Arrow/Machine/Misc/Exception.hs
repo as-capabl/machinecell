@@ -3,6 +3,9 @@
 module
     Control.Arrow.Machine.Misc.Exception
       (
+        -- * Variations of catchP
+        -- $variation
+
         catch,
         handle,
         bracket,
@@ -13,9 +16,15 @@ module
        )
 where
 
-
 import Control.Arrow.Machine.Types
 
+
+{-$variation
+This module provides variations of catchP.
+
+If you use this module together with "Control.Exception" module of base package,
+import this package qualified.
+-}
 
 catch :: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a

@@ -5,16 +5,13 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
-{-|
-Module :
-
-This module should be import manually.
--}
 
 module
     Control.Arrow.Machine.Misc.Discrete
       (
         -- * Discrete type
+        -- $type
+
         T(),
         updates,
         value,
@@ -36,7 +33,8 @@ module
         dkSwitch,
 
         -- * Discrete algebra
-        -- &alg
+        -- $alg
+
         Alg(Alg),
         eval,
         refer
@@ -51,7 +49,9 @@ import qualified Control.Arrow as Arr
 import qualified Control.Arrow.Machine as P
 import Data.Monoid (mconcat, mappend)
 
-{- &type
+{-$type
+This module should be imported manually. Qualified import is recommended.
+
 This module provides an abstraction that continuous values with
 finite number of changing points.
 
@@ -59,7 +59,7 @@ finite number of changing points.
 >>> run (D.hold "apple" >>> D.arr reverse >>> D.edge) ["orange", "grape"]
 ["elppa", "egnaro", "eparg"]
 
-In above example input data of "reverse" is continuous.
+In above example, input data of "reverse" is continuous.
 But the "D.edge" transducer extracts changing points without calling string comparison.
 
 This is possible because the intermediate type `T` has the information of changes
@@ -193,7 +193,7 @@ dkSwitch ::
 dkSwitch sf test k = P.dkSwitch sf test (\sf' x -> rising (k sf' x))
 
 
-{-&alg
+{-$alg
 Calculations between discrete types.
 
 An example is below.
@@ -210,7 +210,7 @@ holdAdd = proc (evx, evy) ->
 @
 
 The last line is equivalent to "arr2 (+) -< (x, y)".
-Using Alg, you can construct more general calculations
+Using Alg, you can construct more complex calculations
 between discrete signals.
 -}
 

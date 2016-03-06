@@ -72,11 +72,9 @@ import Control.Arrow.Machine.Utils
 --
 -- "ProcessA a (Event b) (Event c)" transducers are actually one-directional composable pipes.
 --
--- They can be constructed from `Plan` monads.
+-- They can be constructed from the `Plan` monad.
 -- In `Plan` monad context, `await` and `yield` can be used to get and emit values.
 -- And actions of base monads can be `lift`ed to the context.
---
--- Then, resulting processes are composed as `Category` using `(\>\>\>)` operator.
 --
 -- @
 -- source :: ProcessA (Kleisli IO) (Event ()) (Event String)
@@ -100,11 +98,11 @@ import Control.Arrow.Machine.Utils
 --     lift $ putStrLn x
 -- @
 --
--- @
--- runKleisli (run_ $ source >>> pipe >>> sink) (repeat ())
--- @
+-- Then, resulting processes are composed as `Category` using `(\>\>\>)` operator.
 --
--- The above code reads two lines from stdin, puts a concatenated line to stdout and finishes.
+-- > runKleisli (run_ $ source >>> pipe >>> sink) (repeat ())
+--
+-- This reads two lines from stdin, puts a concatenated line to stdout and finishes.
 --
 -- Unlike other pipe libraries, even the source calls `await`.
 -- The source awaits dummy input, namely "(repeat ())", and discard input values.
@@ -125,7 +123,6 @@ import Control.Arrow.Machine.Utils
 -- So "await \`catchP\` some_cleanup" can handle any stop of both upstream and downstream.
 --
 -- On the other hand, a plan never gets end sign without calling await.
---
 -- So it is better that even a source calls await.
 --
 -- A source that calls await periodically is an "interleaved source".
@@ -220,26 +217,27 @@ import Control.Arrow.Machine.Utils
 
 -- $note
 -- = Purity of `ProcessA (-\>)`
--- Since `a` of `ProcessA a b c` represents base monad(ArrowApply), `ProcessA (-\>)` is expected to be pure.
+-- Since the 1st type parameter of `ProcessA` represents base monad(ArrowApply),
+-- "ProcessA (-\>)" is expected to be pure.
 --
--- In other words, the following arrow results the same result for arbitrary `f`.
+-- In other words, the following arrow results the same result for arbitrary f.
 --
 -- @
 -- proc x -\>
 --   do
---     _ \<- fit arr f -\< x
+--     _ \<- `fit` arr f -\< x
 --     g -\< x
 -- @
 --
--- Which is desugared to `f &&& g \>\>\> arr snd`. At least if `Event` constructor is exported,
--- the proposition is falsible.
--- When `f` is "arr (replicate k) \>\>\> fork" for some integer k and `g` is "arr (const $ Event ())",
+-- Which is desugared to "fit arr f &&& g \>\>\> arr snd". At least if `Event` constructor is exported,
+-- someone can make a counter example.
+-- When f is "arr (replicate k) \>\>\> fork" for some integer k and g is "arr (const $ Event ())",
 -- g yields ()s for k times. That is because, the result value of arrow "f &&& g" is
 -- nothing but "(Event x, Event ())" and its number of yields is k because "Event x" must
 -- be yielded k times.
 --
--- That's because `Event` constructor is hidden.
--- Using primitives exported by this module, it works almost correctly.
+-- This is the reason why the `Event` constructor is hidden.
+-- Using exported primitives, it works almost correctly.
 -- Event number is conserved by inserting an appropriate number of `NoEvent`s.
 -- But there is still a loophole.
 --
@@ -258,7 +256,9 @@ import Control.Arrow.Machine.Utils
 -- = Looping
 --
 -- Although `ProcessA` is an instance of `ArrowLoop`,
--- to send values to upstream, there is a little difficulties.
+-- there is a large limitation.
+--
+-- The limitation is, Events mustn't be looped back to upstream.
 --
 -- In example below, result is [0, 0, 0, 0], not [1, 2, 3, 4].
 --
