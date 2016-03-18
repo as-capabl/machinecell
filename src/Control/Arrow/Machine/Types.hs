@@ -2,6 +2,7 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -13,6 +14,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnboxedTuples #-}
+{-# LANGUAGE KindSignatures #-}
 
 module
     Control.Arrow.Machine.Types
@@ -74,17 +78,23 @@ module
         drSwitch,
         kSwitch,
         dkSwitch,
+        gSwitch,
+        dgSwitch,
         pSwitch,
         pSwitchB,
+        dpSwitch,
+        dpSwitchB,
         rpSwitch,
         rpSwitchB,
+        drpSwitch,
+        drpSwitchB,
         par,
         parB,
-        
+
         -- * Primitive machines - other safe primitives
         fit,
         fitW,
-        
+
         -- * Primitive machines - unsafe
         unsafeExhaust,
       )
@@ -129,6 +139,12 @@ instance
 
 type ProcType a b c = ProcessA a b c
 
+class Stepper a b c s | s -> a, s -> b, s -> c
+  where
+    feed :: s -> a b (c, s)
+    sweep :: s -> a b (Maybe c, s)
+    suspend :: s -> b -> c
+
 -- | The stream transducer arrow.
 --
 -- To construct `ProcessA` instances, use `Control.Arrow.Machine.Plan.Plan`,
@@ -137,44 +153,42 @@ type ProcType a b c = ProcessA a b c
 --
 -- See an introduction at "Control.Arrow.Machine" documentation.
 data ProcessA a b c = ProcessA {
-    feed :: a b (c, ProcessA a b c),
-    sweep :: a b (Maybe c, ProcessA a b c),
-    suspend :: !(b -> c)
+    paFeed :: a b (c, ProcessA a b c),
+    paSweep :: a b (Maybe c, ProcessA a b c),
+    paSuspend :: !(b -> c)
   }
 
+instance
+    Stepper a b c (ProcessA a b c)
+  where
+    feed = paFeed
+    sweep = paSweep
+    suspend = paSuspend
+
+toProcessA ::
+    (ArrowApply a, Stepper a b c s) =>
+    s -> ProcessA a b c
+toProcessA s = ProcessA {
+    paFeed = feed s >>> arr (second toProcessA),
+    paSweep = sweep s >>> arr (second toProcessA),
+    paSuspend = suspend s
+  }
+{-# INLINE[2] toProcessA  #-}
 
 -- For internal use
 class
     (Applicative f, Monad f) => ProcessHelper f
   where
-    step :: ArrowApply a => ProcessA a b c -> a b (f c, ProcessA a b c)
+    step ::
+        (ArrowApply a, Stepper a b c s) =>
+        s -> a b (f c, s)
     helperToMaybe :: f a -> Maybe a
     weakly :: a -> f a
+    compositeStep ::
+        (ArrowApply a, Stepper a b p s1, Stepper a p c s2) =>
+        s1 -> s2 ->
+        a b (f c, s1, s2)
 
-    step' :: ArrowApply a => ProcessA a b c -> a (f b) (f c, ProcessA a b c)
-    step' pa = proc hx ->
-      do
-        let mx = helperToMaybe hx
-        maybe
-            (arr $ const (suspend pa <$> hx, pa))
-            (\x -> proc _ -> step pa -< x)
-            mx
-                -<< ()
-
-    testStep' ::
-        ArrowApply a =>
-        (x -> a b (f c, x)) ->
-        (x -> b -> c) ->
-        x ->
-        ProcessA a (b, c) t ->
-        a b (f c, f t, x, ProcessA a (b, c) t)
-
-testStep ::
-    (ArrowApply a, ProcessHelper f) =>
-    ProcessA a b c ->
-    ProcessA a (b, c) t ->
-    a b (f c, f t, ProcessA a b c, ProcessA a (b, c) t)
-testStep = testStep' step suspend
 
 instance
     ProcessHelper Identity
@@ -182,11 +196,11 @@ instance
     step pa = feed pa >>> first (arr Identity)
     helperToMaybe = Just . runIdentity
     weakly = Identity
-    testStep' stp' _ sf test = proc x ->
+    compositeStep sf test = proc x ->
       do
-        (Identity y, sf') <- stp' sf -< x
-        (t, test') <- feed test -< (x, y)
-        returnA -< (return y, return t, sf', test')
+        (y, sf') <- feed sf -< x
+        (z, test') <- feed test -< y
+        returnA -< (return z, sf', test')
 
 instance
     ProcessHelper Maybe
@@ -194,26 +208,26 @@ instance
     step = sweep
     helperToMaybe = id
     weakly _ = Nothing
-    testStep' stp' sus' sf0 test0 = proc x ->
+    compositeStep sf0 test0 = proc x ->
       do
-        let y = sus' sf0 x
-        (mt, test') <- sweep test0 -< (x, y)
+        let y = suspend sf0 x
+        (mt, test') <- sweep test0 -< y
         (case mt of
-            Just t -> arr $ const (Just y, Just t, sf0, test')
+            Just t -> arr $ const (Just t, sf0, test')
             Nothing -> cont sf0 test')
                 -<< x
       where
         cont sf test = proc x ->
           do
-            (my, sf') <- stp' sf -< x
+            (my, sf') <- sweep sf -< x
             (case my of
                 Just y -> cont2 y sf' test
-                Nothing -> arr $ const (Nothing, Nothing, sf', test))
+                Nothing -> arr $ const (Nothing, sf', test))
                     -<< x
-        cont2 y sf test = proc x ->
+        cont2 y sf test = proc _ ->
           do
-            (t, test') <- feed test -< (x, y)
-            returnA -< (Just y, Just t, sf, test')
+            (t, test') <- feed test -< y
+            returnA -< (Just t, sf, test')
 
 makePA ::
     Arrow a =>
@@ -222,10 +236,73 @@ makePA ::
     (b -> c) ->
     ProcessA a b c
 makePA h !sus = ProcessA {
-    feed = h >>> first (arr runIdentity),
-    sweep = h,
-    suspend = sus
+    paFeed = h >>> first (arr runIdentity),
+    paSweep = h,
+    paSuspend = sus
   }
+
+
+data CompositeStep (a :: * -> * -> *) b c s1 s2 = CompositeStep s1 s2
+
+instance
+    (ArrowApply a, Stepper a b p s1, Stepper a p c s2) =>
+    Stepper a b c (CompositeStep a b c s1 s2)
+  where
+    feed (CompositeStep s1 s2) =
+        compositeStep s1 s2 >>>
+            arr (\(fz, s1', s2') -> (runIdentity $ fz, CompositeStep s1' s2'))
+    sweep (CompositeStep s1 s2) =
+        compositeStep s1 s2 >>>
+            arr (\(fz, s1', s2') -> (fz, CompositeStep s1' s2'))
+    suspend (CompositeStep s1 s2) =
+        suspend s2 . suspend s1
+
+
+data IDStep a b c
+  where
+    IDStep :: IDStep (a :: * -> * -> *) b b
+
+instance
+    ArrowApply a => Stepper a b c (IDStep a b c)
+  where
+    feed IDStep = Cat.id &&& arr (const IDStep)
+    sweep IDStep = arr (const (Nothing, IDStep))
+    suspend IDStep = id
+
+newtype ArrStep (a :: * -> * -> *) b c = ArrStep (b -> c)
+
+instance
+    ArrowApply a => Stepper a b c (ArrStep a b c)
+  where
+    feed (ArrStep f) = arr $ \x -> (f x, ArrStep f)
+    sweep (ArrStep f) = arr $ const (Nothing, ArrStep f)
+    suspend (ArrStep f) = f
+
+
+data ParStep a b c s1 s2
+  where
+    ParStep ::
+        (Stepper a b1 c1 s1, Stepper a b2 c2 s2) =>
+        s1 -> s2 ->
+        ParStep a (b1, b2) (c1, c2) s1 s2
+
+instance
+    ArrowApply a => Stepper a b c (ParStep a b c s1 s2)
+  where
+    feed (ParStep f g) = proc (x1, x2) ->
+      do
+        (y1, f') <- feed f -< x1
+        (y2, g') <- feed g -< x2
+        returnA -< ((y1, y2), ParStep f' g')
+    sweep (ParStep f g) = proc (x1, x2) ->
+      do
+        (my1, f') <- sweep f -< x1
+        (my2, g') <- sweep g -< x2
+        let y1 = fromMaybe (suspend f' x1) my1 -- suspend f ?
+            y2 = fromMaybe (suspend g' x2) my2
+            r = if (isNothing my1 && isNothing my2) then Nothing else Just (y1, y2)
+        returnA -< (r, ParStep f' g')
+    suspend (ParStep f g) = suspend f *** suspend g
 
 
 -- |Natural transformation
@@ -281,148 +358,42 @@ instance
 instance
     ArrowApply a => Cat.Category (ProcessA a)
   where
-    id = idProc
+    id = toProcessA IDStep
     {-# INLINE id #-}
-    g . f = compositeProc f g
+
+    g . f = toProcessA (compositeProc f g)
     {-# INLINE (.) #-}
 
 
 instance
     ArrowApply a => Arrow (ProcessA a)
   where
-    arr = arrProc
+    arr = toProcessA . ArrStep
     {-# INLINE arr #-}
 
-    first pa = parProc pa idProc
+    first pa = toProcessA (ParStep pa IDStep)
     {-# INLINE first #-}
 
-    second pa = parProc idProc pa
+    second pa = toProcessA (ParStep IDStep pa)
     {-# INLINE second #-}
 
-    (***) = parProc
+    pa *** pb = toProcessA (ParStep pa pb)
     {-# INLINE (***) #-}
 
 
-parProc :: ArrowApply a =>
-    ProcType a b c ->
-    ProcType a d e ->
-    ProcType a (b, d) (c, e)
-parProc f g = ProcessA {
-    feed = proc (x1, x2) ->
-      do
-        (y1, f') <- feed f -< x1
-        (y2, g') <- feed g -< x2
-        returnA -< ((y1, y2), parProc f' g'),
-    sweep = proc (x1, x2) ->
-      do
-        (my1, f') <- sweep f -< x1
-        (my2, g') <- sweep g -< x2
-        let y1 = fromMaybe (suspend f' x1) my1 -- suspend f ?
-            y2 = fromMaybe (suspend g' x2) my2
-            r = if (isNothing my1 && isNothing my2) then Nothing else Just (y1, y2)
-        returnA -< (r, parProc f' g'),
-    suspend = suspend f *** suspend g
-  }
-{-# NOINLINE parProc #-}
-
-idProc :: ArrowApply a => ProcType a b b
-idProc = makePA (arr $ \x -> (weakly x, idProc)) id
-{-# NOINLINE idProc #-}
-
-arrProc :: ArrowApply a => (b->c) -> ProcType a b c
-arrProc f = makePA (arr $ \x -> (weakly (f x), arrProc f)) f
-{-# NOINLINE arrProc #-}
-
 -- |Composition is proceeded by the backtracking strategy.
-compositeProc :: ArrowApply a =>
-              ProcType a b d -> ProcType a d c -> ProcType a b c
-compositeProc f0 g0 = ProcessA {
-    feed = proc x ->
-      do
-        (y, f') <- feed f0 -< x
-        (z, g') <- feed g0 -< y
-        returnA -< (z, compositeProc f' g'),
-    sweep = proc x ->
-      do
-        (mz, g') <- sweep g0 -< suspend f0 x
-        (case mz
-          of
-            Just z -> arr $ const (Just z, compositeProc f0 g')
-            Nothing -> btrk f0 g')
-                -<< x,
-    suspend = suspend f0 >>> suspend g0
-  }
-  where
-    btrk f g = proc x ->
-      do
-        (my, f') <- sweep f -< x
-        (mz, g') <-
-            (case my
-              of
-                Just y -> proc () ->
-                  do
-                    (z, g') <- feed g -< y
-                    returnA -< (Just z, g')
-                Nothing -> proc () ->
-                  do
-                    returnA -< (Nothing, g))
-                -<< ()
-        returnA -< (mz, compositeProc f' g')
-
-{-# NOINLINE compositeProc #-}
+compositeProc ::
+    (ArrowApply a, Stepper a b d s1, Stepper a d c s2) =>
+    s1 -> s2 -> CompositeStep a b c s1 s2
+compositeProc = CompositeStep
+{-# INLINE[1] compositeProc #-}
 
 -- rules
 {-# RULES
-"ProcessA: id/*"
-    forall g. compositeProc idProc g = g
-"ProcessA: */id"
-    forall f. compositeProc f idProc = f
-
-"ProcessA: concat/concat"
-    forall f g h. compositeProc (compositeProc f g) h = compositeProc f (compositeProc g h)
-
-"ProcessA: dimap/dimap"
-    forall f g h i j. dimapProc f j (dimapProc g i h)  = dimapProc (g . f) (j . i) h
-"ProcessA: dimap/arr"
-    forall f g h. dimapProc f h (arrProc g) = arrProc (h . g . f)
-
-"ProcessA: arr***/par"
-    forall f1 f2 g1 g2 h. compositeProc (parProc f1 (arrProc f2)) (compositeProc (parProc g1 g2) h) =
-        compositeProc (parProc (compositeProc f1 g1) (dimapProc f2 id g2)) h
-"ProcessA: arr***/par-2"
-    forall f1 f2 g1 g2. compositeProc (parProc f1 (arrProc f2)) (parProc g1 g2) =
-        parProc (compositeProc f1 g1) (dimapProc f2 id g2)
-"ProcessA: par/***arr"
-    forall f1 f2 g1 g2 h. compositeProc (parProc f1 f2) (compositeProc (parProc (arrProc g1) g2) h) =
-        compositeProc (parProc (dimapProc id g1 f1) (compositeProc f2 g2)) h
-"ProcessA: par/***arr-2"
-    forall f1 f2 g1 g2. compositeProc (parProc f1 f2) (parProc (arrProc g1) g2) =
-        parProc (dimapProc id g1 f1) (compositeProc f2 g2)
-
-"ProcessA: first/par"
-    forall f1 g1 g2 h. compositeProc (parProc f1 idProc) (compositeProc (parProc g1 g2) h) =
-        compositeProc (parProc (compositeProc f1 g1) g2) h
-"ProcessA: first/par-2"
-    forall f1 g1 g2. compositeProc (parProc f1 idProc) (parProc g1 g2) =
-        parProc (compositeProc f1 g1) g2
-"ProcessA: par/second"
-    forall f1 f2 g2 h. compositeProc (parProc f1 f2) (compositeProc (parProc idProc g2) h) =
-        compositeProc (parProc f1 (compositeProc f2 g2)) h
-"ProcessA: par/second-2"
-    forall f1 f2 g2. compositeProc (parProc f1 f2) (parProc idProc g2) =
-        parProc f1 (compositeProc f2 g2)
-
-"ProcessA: arr/arr"
-    forall f g h. compositeProc (arrProc f) (compositeProc (arrProc g) h) =
-        compositeProc (arrProc (g . f)) h
-"ProcessA: arr/arr-2"
-    forall f g. compositeProc (arrProc f) (arrProc g) = arrProc (g . f)
-"ProcessA: arr/*" [1]
-    forall f g. compositeProc (arrProc f) g = dimapProc f id g
-"ProcessA: */arr" [1]
-    forall f g. compositeProc f (arrProc g) = dimapProc id g f
-"ProcessA: arr***arr" [0]
-    forall f g. parProc (arrProc f) (arrProc g) = arrProc (f *** g)
+"ProcessA: toProcessA/*[1]"
+    forall f g. compositeProc (toProcessA f) g = compositeProc f g
+"ProcessA: toProcessA/*[2]"
+    forall f g. compositeProc f (toProcessA g) = compositeProc f g
   #-}
 
 
@@ -683,9 +654,9 @@ constructT' fit0 (PlanT pl0) = prependProc $ F.runFT pl0 pr free
         m (Event o, ProcessA a (Event i) (Event o)) ->
         ProcessA a (Event i) (Event o)
     prependProc mr = ProcessA {
-        feed = proc ex -> do { r <- fit0 mr -< (); prependFeed r -<< ex} ,
-        sweep = proc ex -> do { r <- fit0 mr -< (); prependSweep r -<< ex},
-        suspend = const NoEvent
+        paFeed = proc ex -> do { r <- fit0 mr -< (); prependFeed r -<< ex} ,
+        paSweep = proc ex -> do { r <- fit0 mr -< (); prependSweep r -<< ex},
+        paSuspend = const NoEvent
       }
 
     prependFeed (Event x, pa) = arr $ const (Event x, pa)
@@ -714,9 +685,9 @@ constructT' fit0 (PlanT pl0) = prependProc $ F.runFT pl0 pr free
         return (End, stopped)
 
     awaitProc fma = ProcessA {
-        feed = fit' fma,
-        sweep = fit' fma >>> first eToM,
-        suspend = const NoEvent
+        paFeed = fit' fma,
+        paSweep = fit' fma >>> first eToM,
+        paSuspend = const NoEvent
       }
 
     eToM :: a (Event b) (Maybe (Event b))
@@ -753,17 +724,7 @@ switch ::
     ProcessA a b (c, Event t) ->
     (t -> ProcessA a b c) ->
     ProcessA a b c
-switch sf k = makePA
-    (proc x ->
-      do
-        (hy, sf') <- step sf -< x
-        let hevt = fmap snd hy
-        (case (helperToMaybe hevt)
-          of
-            Just (Event t) -> step (k t)
-            _ -> arr $ const (fst <$> hy, switch sf' k))
-                -<< x)
-    (fst . suspend sf)
+switch sf k = ggSwitch (const ()) sf (\() -> k)
 
 
 dSwitch ::
@@ -771,18 +732,7 @@ dSwitch ::
     ProcessA a b (c, Event t) ->
     (t -> ProcessA a b c) ->
     ProcessA a b c
-dSwitch sf k = makePA
-    (proc x ->
-      do
-        (hyevt, sf') <- step sf -< x
-        let hevt = fmap snd hyevt
-            hy = fmap fst hyevt
-        (case (helperToMaybe hevt)
-          of
-            Just (Event t) -> arr $ const (hy, k t)
-            _ -> arr $ const (hy, dSwitch sf' k))
-                -<< x)
-    (fst . suspend sf)
+dSwitch sf k = dggSwitch (const ()) sf (\() -> k)
 
 
 rSwitch ::
@@ -810,16 +760,12 @@ kSwitch ::
     ProcessA a (b, c) (Event t) ->
     (ProcessA a b c -> t -> ProcessA a b c) ->
     ProcessA a b c
-kSwitch sf test k = makePA
-    (proc x ->
-      do
-        (hy, hevt, sf', test') <- testStep sf test -< x
-        (case (helperToMaybe hevt)
-          of
-            Just (Event t) -> step (k sf' t)
-            _ -> arr $ const (hy, kSwitch sf' test' k))
-                -<< x)
-    (suspend sf)
+kSwitch sf test =
+    ggSwitch
+        (\(CompositeStep _ (CompositeStep (ParStep IDStep sf') _)) -> sf')
+        (CompositeStep (ArrStep (id &&& id))
+           (CompositeStep (ParStep IDStep sf) (arr snd &&& test)))
+
 
 dkSwitch ::
     ArrowApply a =>
@@ -827,16 +773,75 @@ dkSwitch ::
     ProcessA a (b, c) (Event t) ->
     (ProcessA a b c -> t -> ProcessA a b c) ->
     ProcessA a b c
-dkSwitch sf test k = makePA
+dkSwitch sf test =
+    dggSwitch
+        (\(CompositeStep _ (CompositeStep (ParStep IDStep sf') _)) -> sf')
+        (CompositeStep (ArrStep (id &&& id))
+           (CompositeStep (ParStep IDStep sf) (arr snd &&& test)))
+
+ggSwitch ::
+    (ArrowApply a, Stepper a b (c, Event t) sWhole) =>
+    (sWhole -> s) ->
+    sWhole ->
+    (s -> t -> ProcessA a b c) ->
+    ProcessA a b c
+ggSwitch picker whole k = makePA
     (proc x ->
       do
-        (hy, hevt, sf', test') <- testStep sf test -< x
+        let
+        (hyevt, whole') <- step whole -<< x
+        let hy = fst <$> hyevt
+            hevt = snd <$> hyevt
         (case (helperToMaybe hevt)
           of
-            Just (Event t) -> arr $ const (hy, k sf' t)
-            _ -> arr $ const (hy, dkSwitch sf' test' k))
+            Just (Event t) -> step (k (picker whole') t)
+            _ -> arr $ const (hy, ggSwitch picker whole' k))
                 -<< x)
-    (suspend sf)
+    (arr fst . suspend whole)
+
+dggSwitch ::
+    (ArrowApply a, Stepper a b (c, Event t) sWhole) =>
+    (sWhole -> s) ->
+    sWhole ->
+    (s -> t -> ProcessA a b c) ->
+    ProcessA a b c
+dggSwitch picker whole k = makePA
+    (proc x ->
+      do
+        let
+        (hyevt, whole') <- step whole -<< x
+        let hy = fst <$> hyevt
+            hevt = snd <$> hyevt
+        (case (helperToMaybe hevt)
+          of
+            Just (Event t) -> arr $ const (hy, k (picker whole') t)
+            _ -> arr $ const (hy, dggSwitch picker whole' k))
+                -<< x)
+    (arr fst . suspend whole)
+
+gSwitch ::
+    ArrowApply a =>
+    ProcessA a b (p, r) ->
+    ProcessA a p q ->
+    ProcessA a (q, r) (c, Event t) ->
+    (ProcessA a p q -> t -> ProcessA a b c) ->
+    ProcessA a b c
+gSwitch pre sf post =
+    ggSwitch
+        (\(CompositeStep _ (CompositeStep (ParStep sf' IDStep) _)) -> sf')
+        (CompositeStep pre (CompositeStep (ParStep sf IDStep) post))
+
+dgSwitch ::
+    ArrowApply a =>
+    ProcessA a b (p, r) ->
+    ProcessA a p q ->
+    ProcessA a (q, r) (c, Event t) ->
+    (ProcessA a p q -> t -> ProcessA a b c) ->
+    ProcessA a b c
+dgSwitch pre sf post =
+    dggSwitch
+        (\(CompositeStep _ (CompositeStep (ParStep sf' IDStep) _)) -> sf')
+        (CompositeStep pre (CompositeStep (ParStep sf IDStep) post))
 
 broadcast ::
     Functor col =>
@@ -848,16 +853,30 @@ par ::
     (forall sf. (b -> col sf -> col (ext, sf))) ->
     col (ProcessA a ext c) ->
     ProcessA a b (col c)
-par r sfs =
-    makePA
-        (parCore r sfs >>> second (arr (par r)))
-        (suspendAll r sfs)
+par r sfs = toProcessA (PluralStep r sfs)
 
 parB ::
     (ArrowApply a, Tv.Traversable col) =>
     col (ProcessA a b c) ->
     ProcessA a b (col c)
 parB = par broadcast
+
+
+data PluralStep ext col a b c
+  where
+    PluralStep ::
+        (forall sf. (b -> col sf -> col (ext, sf))) ->
+        (col (ProcessA a ext c)) ->
+        PluralStep ext col a b c
+
+
+instance
+    (ArrowApply a, Tv.Traversable col) =>
+    Stepper a b (col c) (PluralStep ext col a b c)
+  where
+    feed (PluralStep r sfs) = parCore r sfs >>> arr (runIdentity *** PluralStep r)
+    sweep (PluralStep r sfs) = parCore r sfs >>> arr (id *** PluralStep r)
+    suspend (PluralStep r sfs) = suspendAll r sfs
 
 suspendAll ::
     (ArrowApply a, Tv.Traversable col) =>
@@ -913,17 +932,12 @@ pSwitch ::
     ProcessA a (b, col c) (Event mng) ->
     (col (ProcessA a ext c) -> mng -> ProcessA a b (col c)) ->
     ProcessA a b (col c)
-pSwitch r sfs test k = makePA
-    (proc x ->
-      do
-        (hzs, hevt, sfs', test') <-
-            testStep' (parCore r) (suspendAll r) sfs test -< x
-        (case helperToMaybe hevt
-          of
-            Just (Event t) -> (step (k sfs' t))
-            _ -> arr $ const (hzs, pSwitch r sfs' test' k))
-                -<< x)
-    (suspendAll r sfs)
+pSwitch r sfs test =
+    ggSwitch
+        (\(CompositeStep _
+            (CompositeStep (ParStep IDStep (PluralStep _ sfs')) _)) -> sfs')
+        (CompositeStep (ArrStep (id &&& id))
+            (CompositeStep (ParStep IDStep (PluralStep r sfs)) (arr snd &&& test)))
 
 pSwitchB ::
     (ArrowApply a, Tv.Traversable col) =>
@@ -933,7 +947,27 @@ pSwitchB ::
     ProcessA a b (col c)
 pSwitchB = pSwitch broadcast
 
+dpSwitch ::
+    (ArrowApply a, Tv.Traversable col) =>
+    (forall sf. (b -> col sf -> col (ext, sf))) ->
+    col (ProcessA a ext c) ->
+    ProcessA a (b, col c) (Event mng) ->
+    (col (ProcessA a ext c) -> mng -> ProcessA a b (col c)) ->
+    ProcessA a b (col c)
+dpSwitch r sfs test =
+    dggSwitch
+        (\(CompositeStep _
+            (CompositeStep (ParStep IDStep (PluralStep _ sfs')) _)) -> sfs')
+        (CompositeStep (ArrStep (id &&& id))
+            (CompositeStep (ParStep IDStep (PluralStep r sfs)) (arr snd &&& test)))
 
+dpSwitchB ::
+    (ArrowApply a, Tv.Traversable col) =>
+    col (ProcessA a b c) ->
+    ProcessA a (b, col c) (Event mng) ->
+    (col (ProcessA a b c) -> mng -> ProcessA a b (col c)) ->
+    ProcessA a b (col c)
+dpSwitchB = dpSwitch broadcast
 
 rpSwitch ::
     (ArrowApply a, Tv.Traversable col) =>
@@ -942,13 +976,24 @@ rpSwitch ::
     ProcessA a
         (b, Event (col (ProcessA a ext c) -> col (ProcessA a ext c)))
         (col c)
-rpSwitch r sfs = makePA
-    (proc (x, evCont) ->
-      do
-        let sfsNew = case evCont of {Event f -> f sfs; _ -> sfs}
-        (hzs, sfs') <- parCore r sfsNew -<< x
-        returnA -< (hzs, rpSwitch r sfs'))
-    (fst >>> suspendAll r sfs)
+rpSwitch r sfs =
+    ggSwitch
+        (\(ParStep (PluralStep _ sfs') IDStep) -> sfs')
+        (ParStep (PluralStep r sfs) IDStep)
+        (\sfs' tr -> next r (tr sfs'))
+  where
+    next ::
+        (ArrowApply a, Tv.Traversable col) =>
+        (forall sf. (b -> col sf -> col (ext, sf))) ->
+        col (ProcessA a ext c) ->
+        ProcessA a
+            (b, Event (col (ProcessA a ext c) -> col (ProcessA a ext c)))
+            (col c)
+    next r' sfs' =
+        dggSwitch
+            (\(ParStep (PluralStep _ sfs'') IDStep) -> sfs'')
+            (ParStep (PluralStep r' sfs') IDStep)
+            (\sfs'' _ -> rpSwitch r' sfs'')
 
 
 rpSwitchB ::
@@ -959,7 +1004,27 @@ rpSwitchB ::
         (col c)
 rpSwitchB = rpSwitch broadcast
 
--- `dpSwitch` and `drpSwitch` are not implemented.
+
+drpSwitch ::
+    (ArrowApply a, Tv.Traversable col) =>
+    (forall sf. (b -> col sf -> col (ext, sf))) ->
+    col (ProcessA a ext c) ->
+    ProcessA a
+        (b, Event (col (ProcessA a ext c) -> col (ProcessA a ext c)))
+        (col c)
+drpSwitch r sfs =
+    dggSwitch
+        (\(ParStep (PluralStep _ sfs') IDStep) -> sfs')
+        (ParStep (PluralStep r sfs) IDStep)
+        (\sfs' tr -> drpSwitch r (tr sfs'))
+
+drpSwitchB ::
+    (ArrowApply a, Tv.Traversable col) =>
+    col (ProcessA a b c) ->
+    ProcessA a
+        (b, Event (col (ProcessA a b c) -> col (ProcessA a b c)))
+        (col c)
+drpSwitchB = drpSwitch broadcast
 
 
 --
@@ -984,9 +1049,9 @@ unsafeExhaust p =
     go >>> fork
   where
     go = ProcessA {
-        feed = p >>> arr (\y -> (Event y, go)),
-        sweep = p >>> arr (\y -> (if nullFd y then Nothing else Just (Event y), go)),
-        suspend = const NoEvent
+        paFeed = p >>> arr (\y -> (Event y, go)),
+        paSweep = p >>> arr (\y -> (if nullFd y then Nothing else Just (Event y), go)),
+        paSuspend = const NoEvent
       }
 
     fork = repeatedly $ await >>= Fd.mapM_ yield
