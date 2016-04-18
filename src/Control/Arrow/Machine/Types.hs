@@ -14,8 +14,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MagicHash #-}
-{-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE KindSignatures #-}
 
 module
@@ -365,7 +363,7 @@ instance
   where
     id = idProc
     {-# INLINE id #-}
-    -- g . f = rmap fst $ toProcessA (CompositeStep (\_ y -> (y, ())) f g)
+
     g . f = compositeProc f g
     {-# INLINE (.) #-}
 

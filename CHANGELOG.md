@@ -1,4 +1,9 @@
 
+3.2.0
+----------
+* Add arrow-tr flag
+* add `gSwitch`, `dgSwitch`
+
 3.1.0
 -----------
 * Add `Discrete` utilities
