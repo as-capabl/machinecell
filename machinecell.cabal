@@ -62,4 +62,4 @@ source-repository head
 source-repository this
   type:		git
   location:	https://github.com/as-capabl/machinecell.git
-  tag:		release-3.1.0
+  tag:		release-3.2.0
