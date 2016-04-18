@@ -18,7 +18,7 @@ module
         ary3,
         ary4,
         ary5,
-        
+
         kleisli,
         kleisli0,
         kleisli2,
@@ -28,9 +28,11 @@ module
 
         unArrowMonad,
         arrowMonad,
-                
+
+#if defined(MIN_VERSION_arrows)
         reading,
         statefully,
+#endif
 
         -- * Arrow construction helper (Lens)
         -- |Lens Isomorphisms between arrows and monads.
@@ -38,7 +40,9 @@ module
         -- Use with lens operator (^.) and (#).
         kl,
         am,
+#if defined(MIN_VERSION_arrows)
         rd,
+#endif
         uc0,
         uc1,
         uc2,
@@ -52,18 +56,22 @@ module
         toAS,
         fromAS,
 
+#if defined(MIN_VERSION_arrows)
         elimR
+#endif
     )
 where
 
 import Prelude hiding ((.), id)
 import Control.Category
 import Control.Arrow
+#if defined(MIN_VERSION_arrows)
 import Control.Arrow.Operations (store, fetch)
 import Control.Arrow.Transformer.Reader 
 import Control.Arrow.Transformer.State
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT, runStateT)
+#endif
 import Data.Profunctor
 
        
@@ -155,7 +163,8 @@ arrowMonad ::
     a p q -> p -> ArrowMonad a q
 arrowMonad af x = ArrowMonad $ arr (const x) >>> af
 
-    
+
+#if defined(MIN_VERSION_arrows)
 reading :: 
     (Monad m, Arrow a) => 
     (forall p q. (p->m q)->a p q) -> 
@@ -174,7 +183,7 @@ statefully f ms = proc x ->
     (y, s') <- liftState (f $ \(x, s) -> runStateT (ms x) s) -< (x, s)
     store -< s'
     returnA -< y
-    
+#endif
 
 type MyIso s t a b =
     forall p f. (Profunctor p, Functor f) =>
@@ -197,6 +206,7 @@ am ::
     MyIso' (b -> ArrowMonad a c) (a b c)
 am = myIso unArrowMonad arrowMonad
 
+#if defined(MIN_VERSION_arrows)
 rd ::
     (Arrow a) =>
     (forall p q. MyIso' (p -> m q) (a p q)) ->
@@ -207,6 +217,7 @@ rd f = e . f . g
         (\frmy -> uncurry (runReaderT . frmy))
         (\fmy -> ReaderT . (curry fmy))
     g = myIso ReaderArrow runReader
+#endif
 
 uc0 :: MyIso' (m b) (() -> m b)
 uc0 = myIso const ($())
@@ -234,11 +245,12 @@ uc5 = myIso
     (\f (a1, a2, a3, a4, a5) -> f a1 a2 a3 a4 a5)
     (\f a1 a2 a3 a4 a5 -> f (a1, a2, a3, a4, a5))
 
+#if defined(MIN_VERSION_arrows)
 -- |Alternate for `elimReader` that can be used with both ghc 7.8 and older.
 elimR ::
     ArrowAddReader r a a' =>
     a (AS e) b -> a' (e, AS r) b
 elimR f =
     second (arr $ fromAS) >>> elimReader (arr toAS >>> f)
-
+#endif
 
