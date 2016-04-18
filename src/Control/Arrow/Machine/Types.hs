@@ -184,6 +184,7 @@ class
         s -> a b (f c, s)
     helperToMaybe :: f a -> Maybe a
     weakly :: a -> f a
+
     compositeStep ::
         (ArrowApply a, Stepper a b p s1, Stepper a p c s2) =>
         s1 -> s2 ->
@@ -242,11 +243,15 @@ makePA h !sus = ProcessA {
   }
 
 
-data CompositeStep (a :: * -> * -> *) b c s1 s2 = CompositeStep s1 s2
+data CompositeStep a b c s1 s2
+  where
+    CompositeStep ::
+        (Stepper a b p s1, Stepper a p c s2) =>
+        s1 -> s2 ->
+        CompositeStep a b c s1 s2
 
 instance
-    (ArrowApply a, Stepper a b p s1, Stepper a p c s2) =>
-    Stepper a b c (CompositeStep a b c s1 s2)
+    ArrowApply a => Stepper a b c (CompositeStep a b c s1 s2)
   where
     feed (CompositeStep s1 s2) =
         compositeStep s1 s2 >>>
@@ -358,42 +363,134 @@ instance
 instance
     ArrowApply a => Cat.Category (ProcessA a)
   where
-    id = toProcessA IDStep
+    id = idProc
     {-# INLINE id #-}
-
-    g . f = toProcessA (compositeProc f g)
+    -- g . f = rmap fst $ toProcessA (CompositeStep (\_ y -> (y, ())) f g)
+    g . f = compositeProc f g
     {-# INLINE (.) #-}
 
 
 instance
     ArrowApply a => Arrow (ProcessA a)
   where
-    arr = toProcessA . ArrStep
+    arr = arrProc
     {-# INLINE arr #-}
 
-    first pa = toProcessA (ParStep pa IDStep)
+    first pa = parProc pa idProc
     {-# INLINE first #-}
 
-    second pa = toProcessA (ParStep IDStep pa)
+    second pa = parProc idProc pa
     {-# INLINE second #-}
 
-    pa *** pb = toProcessA (ParStep pa pb)
+    (***) = parProc
     {-# INLINE (***) #-}
 
 
+parProc :: ArrowApply a =>
+    ProcType a b c ->
+    ProcType a d e ->
+    ProcType a (b, d) (c, e)
+parProc f g = toProcessA $ ParStep f g
+{-# INLINE [0] parProc #-}
+
+idProc :: ArrowApply a => ProcType a b b
+idProc = makePA (arr $ \x -> (weakly x, idProc)) id
+{-# NOINLINE idProc #-}
+
+arrProc :: ArrowApply a => (b->c) -> ProcType a b c
+arrProc f = makePA (arr $ \x -> (weakly (f x), arrProc f)) f
+{-# NOINLINE arrProc #-}
+
 -- |Composition is proceeded by the backtracking strategy.
-compositeProc ::
-    (ArrowApply a, Stepper a b d s1, Stepper a d c s2) =>
-    s1 -> s2 -> CompositeStep a b c s1 s2
-compositeProc = CompositeStep
-{-# INLINE[1] compositeProc #-}
+compositeProc :: ArrowApply a =>
+              ProcType a b d -> ProcType a d c -> ProcType a b c
+compositeProc f0 g0 = ProcessA {
+    paFeed = proc x ->
+      do
+        (y, f') <- feed f0 -< x
+        (z, g') <- feed g0 -< y
+        returnA -< (z, compositeProc f' g'),
+    paSweep = proc x ->
+      do
+        (mz, g') <- sweep g0 -< suspend f0 x
+        (case mz
+          of
+            Just z -> arr $ const (Just z, compositeProc f0 g')
+            Nothing -> btrk f0 g')
+                -<< x,
+    paSuspend = suspend f0 >>> suspend g0
+  }
+  where
+    btrk f g = proc x ->
+      do
+        (my, f') <- sweep f -< x
+        (mz, g') <-
+            (case my
+              of
+                Just y -> proc () ->
+                  do
+                    (z, g') <- feed g -< y
+                    returnA -< (Just z, g')
+                Nothing -> proc () ->
+                  do
+                    returnA -< (Nothing, g))
+                -<< ()
+        returnA -< (mz, compositeProc f' g')
+
+{-# NOINLINE compositeProc #-}
 
 -- rules
 {-# RULES
-"ProcessA: toProcessA/*[1]"
-    forall f g. compositeProc (toProcessA f) g = compositeProc f g
-"ProcessA: toProcessA/*[2]"
-    forall f g. compositeProc f (toProcessA g) = compositeProc f g
+"ProcessA: id/*"
+    forall g. compositeProc idProc g = g
+"ProcessA: */id"
+    forall f. compositeProc f idProc = f
+
+"ProcessA: concat/concat"
+    forall f g h. compositeProc (compositeProc f g) h = compositeProc f (compositeProc g h)
+
+"ProcessA: dimap/dimap"
+    forall f g h i j. dimapProc f j (dimapProc g i h)  = dimapProc (g . f) (j . i) h
+"ProcessA: dimap/arr"
+    forall f g h. dimapProc f h (arrProc g) = arrProc (h . g . f)
+
+"ProcessA: arr***/par"
+    forall f1 f2 g1 g2 h. compositeProc (parProc f1 (arrProc f2)) (compositeProc (parProc g1 g2) h) =
+        compositeProc (parProc (compositeProc f1 g1) (dimapProc f2 id g2)) h
+"ProcessA: arr***/par-2"
+    forall f1 f2 g1 g2. compositeProc (parProc f1 (arrProc f2)) (parProc g1 g2) =
+        parProc (compositeProc f1 g1) (dimapProc f2 id g2)
+"ProcessA: par/***arr"
+    forall f1 f2 g1 g2 h. compositeProc (parProc f1 f2) (compositeProc (parProc (arrProc g1) g2) h) =
+        compositeProc (parProc (dimapProc id g1 f1) (compositeProc f2 g2)) h
+"ProcessA: par/***arr-2"
+    forall f1 f2 g1 g2. compositeProc (parProc f1 f2) (parProc (arrProc g1) g2) =
+        parProc (dimapProc id g1 f1) (compositeProc f2 g2)
+
+"ProcessA: first/par"
+    forall f1 g1 g2 h. compositeProc (parProc f1 idProc) (compositeProc (parProc g1 g2) h) =
+        compositeProc (parProc (compositeProc f1 g1) g2) h
+"ProcessA: first/par-2"
+    forall f1 g1 g2. compositeProc (parProc f1 idProc) (parProc g1 g2) =
+        parProc (compositeProc f1 g1) g2
+"ProcessA: par/second"
+    forall f1 f2 g2 h. compositeProc (parProc f1 f2) (compositeProc (parProc idProc g2) h) =
+        compositeProc (parProc f1 (compositeProc f2 g2)) h
+"ProcessA: par/second-2"
+    forall f1 f2 g2. compositeProc (parProc f1 f2) (parProc idProc g2) =
+        parProc f1 (compositeProc f2 g2)
+
+"ProcessA: arr/arr"
+    forall f g h. compositeProc (arrProc f) (compositeProc (arrProc g) h) =
+        compositeProc (arrProc (g . f)) h
+"ProcessA: arr/arr-2"
+    forall f g. compositeProc (arrProc f) (arrProc g) = arrProc (g . f)
+"ProcessA: arr/*" [1]
+    forall f g. compositeProc (arrProc f) g = dimapProc f id g
+"ProcessA: */arr" [1]
+    forall f g. compositeProc f (arrProc g) = dimapProc id g f
+"ProcessA: arr***arr" [0]
+    forall f g. parProc (arrProc f) (arrProc g) = arrProc (f *** g)
   #-}
 
 

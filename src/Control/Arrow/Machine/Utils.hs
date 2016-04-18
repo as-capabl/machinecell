@@ -56,9 +56,10 @@ module
         parB,
         now,
         onEnd,
-
+#if defined(MIN_VERSION_arrows)
         -- * Transformer
         readerProc
+#endif
      )
 where
 
@@ -71,8 +72,9 @@ import Control.Monad.Trans
 import Control.Monad.State
 import Control.Arrow
 import Control.Applicative
+#if defined(MIN_VERSION_arrows)
 import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
-
+#endif
 import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
 
@@ -325,6 +327,8 @@ onEnd = arr collapse >>> go
     go = repeatedly $
         await `catchP` (yield () >> stop)
 
+
+#if defined(MIN_VERSION_arrows)
 -- | Run reader of base arrow.
 readerProc ::
     (ArrowApply a, ArrowApply a', ArrowAddReader r a a') =>
@@ -334,4 +338,4 @@ readerProc pa = arr swap >>> fitW snd (\ar -> arr swap >>> elimReader ar) pa
   where
     swap :: (a, b) -> (b, a)
     swap ~(a, b) = (b, a)
-
+#endif

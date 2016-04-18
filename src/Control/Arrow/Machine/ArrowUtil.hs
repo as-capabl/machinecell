@@ -125,7 +125,7 @@ ary5 ::
     a (a1, a2, a3, a4, a5) b
 ary5 f fmx = f $ \(x1, x2, x3, x4, x5) -> fmx x1 x2 x3 x4 x5
 
-         
+
 kleisli :: Monad m => (a->m b) -> Kleisli m a b
 kleisli = ary1 Kleisli
 

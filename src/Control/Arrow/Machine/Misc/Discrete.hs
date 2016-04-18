@@ -23,6 +23,7 @@ module
         arr5,
 
         constant,
+        unsafeConstant,
         hold,
         accum,
         fromEq,
@@ -77,15 +78,18 @@ makeT ::
     P.ProcessA a (P.Event (), b) (T b)
 makeT = Arr.arr $ uncurry T
 
--- TODO this should be implemented by switch
-rising ::
+
+stimulate ::
     ArrowApply a =>
     P.ProcessA a b (T c) ->
     P.ProcessA a b (T c)
-rising sf = proc x ->
-  do
-    (dy, n) <- sf &&& P.now -< x
-    makeT -< (updates dy `mappend` n, value dy)
+stimulate sf = P.dgSwitch (id &&& id) sf body $ \sf' _ -> sf'
+  where
+    body = proc (dy, _) ->
+      do
+        n <- P.now -< ()
+        disc <- makeT -< (updates dy `mappend` n, value dy)
+        returnA -< (disc, updates disc)
 
 arr ::
     ArrowApply a =>
@@ -133,6 +137,15 @@ constant::
     P.ProcessA a b (T c)
 constant x =
     (P.now &&& Arr.arr (const x)) >>> makeT
+
+-- |Constant without initial notifications.
+-- Users must manage initialization manually.
+unsafeConstant::
+    ArrowApply a =>
+    c ->
+    P.ProcessA a b (T c)
+unsafeConstant x =
+    (pure P.noEvent &&& Arr.arr (const x)) >>> makeT
 
 onUpdate ::
     ArrowApply a =>
@@ -182,7 +195,7 @@ kSwitch ::
     P.ProcessA a (b, T c) (P.Event t) ->
     (P.ProcessA a b (T c) -> t -> P.ProcessA a b (T c)) ->
     P.ProcessA a b (T c)
-kSwitch sf test k = P.kSwitch sf test (\sf' x -> rising (k sf' x))
+kSwitch sf test k = P.kSwitch sf test (\sf' x -> stimulate (k sf' x))
 
 dkSwitch ::
     ArrowApply a =>
@@ -190,7 +203,7 @@ dkSwitch ::
     P.ProcessA a (b, T c) (P.Event t) ->
     (P.ProcessA a b (T c) -> t -> P.ProcessA a b (T c)) ->
     P.ProcessA a b (T c)
-dkSwitch sf test k = P.dkSwitch sf test (\sf' x -> rising (k sf' x))
+dkSwitch sf test k = P.dkSwitch sf test (\sf' x -> stimulate (k sf' x))
 
 
 {-$alg
