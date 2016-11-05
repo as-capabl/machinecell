@@ -103,10 +103,11 @@ import Data.Profunctor (Profunctor, dimap, rmap)
 import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Control.Monad.Reader
 import Control.Monad.Writer hiding ((<>))
 import Control.Monad.Identity
+import Control.Monad.Trans.Cont (ContT(..), evalContT, callCC)
 import Control.Applicative
 import Data.Foldable as Fd
 import Data.Traversable as Tv
@@ -1158,42 +1159,16 @@ unsafeExhaust p =
 --
 -- Running
 --
---
--- Utilities
---
-while_ ::
-    Monad m =>
-    m Bool -> m a -> m ()
-while_ cond body =
-  do
-    b <- cond
-    if b
-        then body >> while_ cond body
-        else return ()
-
--- | Monoid wrapper
-data WithEnd r = WithEnd {
-    getRWE :: r,
-    getContWE :: !Bool
-  }
-
-instance
-    Monoid r => Monoid (WithEnd r)
-  where
-    mempty = WithEnd mempty True
-    WithEnd x True `mappend` WithEnd y b = WithEnd (x `mappend` y) b
-    mx@(WithEnd _ False) `mappend` _ = mx
-
 
 --
 -- Running Monad (To be exported)
 --
 data RunInfo a i o m = RunInfo {
-    freezeRI :: ProcessA a i o,
-    getInputRI :: i,
-    getPaddingRI :: i,
-    getPhaseRI :: Phase,
-    getFitRI :: forall p q. a p q -> p -> m q
+    freezeRI :: !(ProcessA a i o),
+    getInputRI :: !i,
+    getPaddingRI :: !i,
+    getPhaseRI :: !Phase,
+    getFitRI :: !(forall p q. a p q -> p -> m q)
   }
 
 type RM a i o m = StateT (RunInfo a i o m) m
@@ -1217,8 +1192,8 @@ runRM f pa mx =
 
 
 feed_ ::
-    Monad m =>
-    i -> i -> RM a i o m Bool
+    (Monad m, MonadState (RunInfo a i o m') m) =>
+    i -> i -> m Bool
 feed_ input padding =
   do
     ph <- gets getPhaseRI
@@ -1236,23 +1211,15 @@ feed_ input padding =
             return False
 
 feedR ::
-    Monad m =>
-    i -> RM a (Event i) o m Bool
+    (Monad m, MonadState (RunInfo a (Event i) o m') m) =>
+    i -> m Bool
 feedR x = feed_ (Event x) NoEvent
 
-
-{-
-finalizeE ::
-    Monad m =>
-    RM a (Event i) o m Bool
-finalizeE = feed_ End End
--}
 
 freeze ::
     Monad m =>
     RM a i o m (ProcessA a i o)
 freeze = gets freezeRI
-
 
 sweepR ::
     Monad m =>
@@ -1289,26 +1256,32 @@ sweepR =
             return $ suspend pa x
 
 
-
-
-
 sweepAll ::
     (ArrowApply a, Monoid r, Monad m) =>
     (o->r) ->
-    WriterT (WithEnd r) (RM a i (Event o) m) ()
+    ContT Bool (StateT r (RM a i (Event o) m)) ()
 sweepAll outpre =
-        while_
-            ((not . (== Suspend)) `liftM` lift (gets getPhaseRI)) $
-          do
-            evx <- lift sweepR
-            case evx
-              of
-                Event x ->
-                    tell (WithEnd (outpre x) True)
-                NoEvent ->
-                    return ()
-                End ->
-                    tell (WithEnd mempty False)
+    callCC $ \sus -> forever $ cond sus >> body
+  where
+    cond sus =
+      do
+        ph <- lift $ lift $ gets getPhaseRI
+        if ph == Suspend then sus () else return ()
+    body =
+      do
+        evx <- lift $ lift $ sweepR
+        case evx
+          of
+            Event x ->
+              do
+                lift $ modify' (`mappend` outpre x)
+            NoEvent ->
+                return ()
+            End ->
+                breakCont False
+
+breakCont :: Monad m => r -> ContT r m a
+breakCont = ContT . const . return
 
 
 -- | Run a machine with results concatenated in terms of a monoid.
@@ -1318,31 +1291,27 @@ runOn ::
     ProcessA a (Event b) (Event c) ->
     a (f b) r
 runOn outpre pa0 = unArrowMonad $ \xs ->
-  do
-    wer <- runRM arrowMonad pa0 $ execWriterT $
+    runRM arrowMonad pa0 $ execStateT `flip` mempty $
       do
-        -- Sweep initial events.
-        (_, wer) <- listen $ sweepAll outpre
+        _ <- evalContT $
+          do
+            -- Sweep initial events.
+            sweepAll outpre
 
-        -- Feed inputs.
-        if getContWE wer
-          then
-            Fd.foldr feedSweep (return ()) xs
-          else
-            return ()
+            -- Feed values
+            mapM_ feedSweep xs
+
+            return True
 
         -- Terminate.
-        _ <- lift (feed_ End End)
-        sweepAll outpre
-    return $ getRWE wer
+        _ <- lift $ feed_ End End
+        evalContT $ sweepAll outpre >> return True
 
   where
-    feedSweep x cont =
+    feedSweep x =
       do
-        _ <- lift $ feedR x
-        ((), wer) <- listen $ sweepAll outpre
-        if getContWE wer then cont else return ()
-
+        _ <- lift $ lift $ feedR x
+        sweepAll outpre
 
 
 newtype Builder a = Builder {
@@ -1403,21 +1372,27 @@ stepRun ::
     a b (ExecInfo [c], ProcessA a (Event b) (Event c))
 stepRun pa0 = unArrowMonad $ \x ->
   do
-    (pa, wer)  <- runRM arrowMonad pa0 $ runWriterT $
+    ((csmd, ct, pa), r)  <- runRM arrowMonad pa0 $ runStateT `flip` mempty $
       do
-        sweepAll singleton
-        _ <- lift $ feedR x
-        sweepAll singleton
-        lift $ freeze
-    return $ (retval wer, pa)
-
+        csmd <- evalContT $
+          do
+            sweepAll singleton
+            return True
+        ct <- evalContT $
+          do
+            _ <- lift $ lift $ feedR x
+            sweepAll singleton
+            return True
+        pa <- lift $ freeze
+        return (csmd, ct, pa)
+    return $ (retval r csmd ct, pa)
   where
     singleton x = Endo (x:)
 
-    retval WithEnd {..} = ExecInfo {
-        yields = appEndo getRWE [],
-        hasConsumed = True,
-        hasStopped = not getContWE
+    retval r csmd ct = ExecInfo {
+        yields = appEndo r [],
+        hasConsumed = csmd,
+        hasStopped = not ct
       }
 
 -- | Execute until an output produced.

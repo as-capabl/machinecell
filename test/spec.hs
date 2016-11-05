@@ -116,6 +116,17 @@ basics =
             in
               r1 == r2
 
+        it "is lazy for individual input values" $
+          do
+            let l = runOn (\x -> [x]) Cat.id (take 10 $ repeat undefined)
+            length l `shouldBe` 10
+
+{-
+        it "is lazy for inpurt stream" $
+          do
+            let l = take 10 $ run Cat.id (repeat undefined)
+            length l `shouldBe` 10
+-}
 
 rules =
   do
