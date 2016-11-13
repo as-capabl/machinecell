@@ -797,19 +797,19 @@ repeatedlyT :: (Monad m, ArrowApply a) =>
               PlanT i o m r ->
               ProcessA a (Event i) (Event o)
 
-repeatedlyT f pl = constructT f $ forever pl
+repeatedlyT f = constructT f . forever
 
 
 -- for pure
 construct :: ArrowApply a =>
-             Plan i o t ->
+             PlanT i o Identity r ->
              ProcessA a (Event i) (Event o)
-construct pl = constructT (ary0 unArrowMonad) pl
+construct = constructT (arr . const . runIdentity)
 
 repeatedly :: ArrowApply a =>
-              Plan i o t ->
+              PlanT i o Identity r ->
               ProcessA a (Event i) (Event o)
-repeatedly pl = construct $ forever pl
+repeatedly = construct . forever
 
 
 --
