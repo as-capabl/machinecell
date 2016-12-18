@@ -54,6 +54,7 @@ module
         anytime,
         par,
         parB,
+        oneshot,
         now,
         onEnd,
 #if defined(MIN_VERSION_arrows)
@@ -311,14 +312,27 @@ echo ::
 
 echo = filter (arr (const True))
 
+-- |Emit an event of given value as soon as possible.
+oneshot ::
+    ArrowApply a =>
+    c ->
+    ProcessA a b (Event c)
+oneshot x = arr (const noEvent) >>> go
+  where
+    go = construct $
+        yield x >> forever await
+
+-- |Emit an event as soon as possible.
+--
+-- @
+--  now = oneshot ()
+-- @
 now ::
     ArrowApply a =>
     ProcessA a b (Event ())
-now = arr (const noEvent) >>> go
-  where
-    go = construct $
-        yield () >> forever await
+now = oneshot ()
 
+-- |Emit an event at the end of the input stream.
 onEnd ::
     (ArrowApply a, Occasional' b) =>
     ProcessA a b (Event ())

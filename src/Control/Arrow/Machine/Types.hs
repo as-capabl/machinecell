@@ -31,6 +31,7 @@ module
         filterJust,
         filterLeft,
         filterRight,
+        splitEvent,
         evMap,
 
         -- * Coroutine monad
@@ -589,21 +590,39 @@ condEvent _ End = End
 condEvent True ev = ev
 condEvent False _ = NoEvent
 
-filterEvent :: (a -> Bool) -> Event a -> Event a
-filterEvent cond ev@(Event x) = condEvent (cond x) ev
-filterEvent _ ev = ev
+filterEvent ::
+    Arrow ar =>
+    (a -> Bool) ->
+    ar (Event a) (Event a)
+filterEvent cond = filterJust <<< evMap mcond
+  where
+    mcond x
+        | cond x = Just x
+        | otherwise = Nothing
 
-filterJust :: Event (Maybe a) -> Event a
-filterJust (Event (Just x)) = Event x
-filterJust (Event Nothing) = NoEvent
-filterJust NoEvent = NoEvent
-filterJust End = End
+filterJust ::
+    Arrow ar => ar (Event (Maybe a)) (Event a)
+filterJust = arr filterJust'
+  where
+    filterJust' (Event (Just x)) = Event x
+    filterJust' (Event Nothing) = NoEvent
+    filterJust' NoEvent = NoEvent
+    filterJust' End = End
 
-filterLeft :: Event (Either a b) -> Event a
-filterLeft = filterJust . fmap (either Just (const Nothing))
+filterLeft ::
+    Arrow ar =>
+    ar (Event (Either a b)) (Event a)
+filterLeft = filterJust <<< evMap (either Just (const Nothing))
 
-filterRight :: Event (Either a b) -> Event b
-filterRight = filterJust . fmap (either (const Nothing) Just)
+filterRight ::
+    Arrow ar =>
+    ar (Event (Either a b)) (Event b)
+filterRight = filterJust <<< evMap (either (const Nothing) Just)
+
+splitEvent ::
+    Arrow ar =>
+    ar (Event (Either a b)) (Event a, Event b)
+splitEvent = filterLeft &&& filterRight
 
 -- | Alias of "arr . fmap"
 --
