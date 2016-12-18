@@ -1,4 +1,12 @@
 
+3.3.0
+----------
+* Correct a space leak problem
+* Add `splitEvent`, `oneshot`
+* Generalize some functions
+    * construct, repeatedly
+    * filterEvent, filterJust, filterLeft, filterRight
+
 3.2.0
 ----------
 * Add arrow-tr flag

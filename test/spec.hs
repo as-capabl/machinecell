@@ -365,6 +365,13 @@ plans = describe "Plan" $
 
 utility =
   do
+    describe "splitEvent" $
+      do
+        it "splits an event stream" $
+          do
+            run (splitEvent >>> arr fst) [Left 1, Right 2, Left 3, Right 4] `shouldBe` [1, 3]
+            run (splitEvent >>> arr snd) [Left 1, Right 2, Left 3, Right 4] `shouldBe` [2, 4]
+
     describe "edge" $
       do
         it "detects edges of input behaviour" $
@@ -422,7 +429,7 @@ switches =
             let
                 before = proc evx ->
                   do
-                    ch <- P.filter (arr $ (\x -> x `mod` 2 == 0)) -< evx
+                    ch <- P.filterEvent (\x -> x `mod` 2 == 0) -< evx
                     returnA -< (noEvent, ch)
 
                 after t = proc evx -> returnA -< (t*) <$> evx
