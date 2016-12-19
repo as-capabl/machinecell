@@ -110,7 +110,7 @@ import Control.Monad.Writer hiding ((<>))
 import Control.Monad.Identity
 import Control.Monad.Trans.Cont (ContT(..), evalContT, callCC)
 import Control.Applicative
-import Data.Foldable as Fd
+import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup, (<>))
 import Data.Maybe (fromMaybe, isNothing, isJust)
@@ -1318,7 +1318,7 @@ runOn outpre pa0 = unArrowMonad $ \xs ->
             sweepAll outpre
 
             -- Feed values
-            mapM_ feedSweep xs
+            Fd.mapM_ feedSweep xs
 
             return True
 
