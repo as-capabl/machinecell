@@ -1,5 +1,5 @@
 name:                machinecell
-version:             3.3.1
+version:             3.3.2
 synopsis:            Arrow based stream transducers
 license:             BSD3
 license-file:        LICENSE
@@ -25,7 +25,9 @@ description:
 flag arrow-tr
   description:
     Arrow transformer support.
-  default: True
+    .
+    A few environments(stackage, haste, etc) don't support this package.
+  default: False
   manual: True
 
 library
@@ -39,7 +41,7 @@ library
         Control.Arrow.Machine.Misc.Discrete
   other-extensions:    FlexibleInstances, Arrows, RankNTypes, TypeSynonymInstances, MultiParamTypeClasses, GADTs, FlexibleContexts, NoMonomorphismRestriction, RecursiveDo
   ghc-options: -Wall
-  build-depends:       base >=4.6.0.0 && <5.0, mtl >=2.2, free >=4.12, semigroups >=0.8.3.1, profunctors >=4.0.4, transformers==0.4.*
+  build-depends:       base >=4.6.0.0 && <5.0, mtl >=2.2 && < 3.0, free >= 4.12 && < 5.0, semigroups >=0.8.3.1 && < 1.0, profunctors >=4.0.4 && <6.0, transformers >= 0.4 && <0.6
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -52,7 +54,7 @@ Test-suite spec
   hs-source-dirs:      test
   main-is:             spec.hs
   other-modules:       RandomProc, LoopUtil
-  Build-depends:       base >=4.0 && <5.0, mtl >=2.2, profunctors >=4.0.4, QuickCheck >=1.0, hspec >=0.2.0, arrows >=0.4.3.0, semigroups >=0.8.3.1, machinecell >=1.0.0
+  Build-depends:       base >=4.0 && <5.0, mtl >=2.2, profunctors >=4.0.4, QuickCheck >=1.0, hspec >=0.2.0, semigroups >=0.8.3.1, machinecell >=1.0.0
 
 source-repository head
   type:		git
@@ -62,4 +64,4 @@ source-repository head
 source-repository this
   type:		git
   location:	https://github.com/as-capabl/machinecell.git
-  tag:		release-3.3.1
+  tag:		release-3.3.2

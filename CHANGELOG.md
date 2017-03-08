@@ -1,4 +1,13 @@
 
+3.3.2
+----------
+* Modify again the versions of depending packages.
+* Make the default of 'arrow-tr' flag False.
+
+3.3.1
+----------
+* Modify the versions of depending packages.
+
 3.3.0
 ----------
 * Correct a space leak problem
