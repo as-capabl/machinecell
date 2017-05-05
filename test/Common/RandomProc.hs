@@ -3,7 +3,7 @@
 {-# LANGUAGE Arrows #-}
 
 module
-    RandomProc
+    Common.RandomProc
 where
 
 import Prelude
