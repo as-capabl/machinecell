@@ -34,16 +34,16 @@ import Data.Monoid (Endo(Endo), mappend, appEndo)
 newtype Duct a = Duct (Endo [a])
 
 oneMore ::
-    ArrowApply a =>
-    P.ProcessA a (P.Event ()) (P.Event ())
+    Monad m =>
+    P.ProcessT m (P.Event ()) (P.Event ())
 oneMore = proc ev ->
   do
     ed <- P.onEnd -< ev
     P.gather -< [ev, ed]
     
 intake ::
-    ArrowApply a =>
-    P.ProcessA a (P.Event b, P.Event ()) (Duct b)
+    Monad m =>
+    P.ProcessT m (P.Event b, P.Event ()) (Duct b)
 intake = proc (ev, clock) ->
   do
     cl2 <- oneMore -< clock
@@ -52,8 +52,8 @@ intake = proc (ev, clock) ->
     returnA -< Duct e
 
 outlet ::
-    ArrowApply a =>
-    P.ProcessA a (Duct b, P.Event ()) (P.Event b)
+    Monad m =>
+    P.ProcessT m (Duct b, P.Event ()) (P.Event b)
 outlet = proc (~(Duct dct), clock) ->
   do
     cl2 <- oneMore -< clock

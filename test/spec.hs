@@ -26,9 +26,8 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import RandomProc
 import LoopUtil
-runKI a x = runIdentity (runKleisli a x)
 
-
+runKI fmy x = runIdentity (fmy x)
 
 main = hspec $
   do
@@ -66,7 +65,7 @@ basics =
             doubler = repeatedly $
                       do {x <- await; yield x; yield x}
             -- 入力値をStateのリストの先頭にPushする副作用を行い、同じ値を出力する
-            pusher = repeatedlyT (Kleisli . const) $
+            pusher = repeatedlyT $
                      do {x <- await; lift $ modify (x:); yield x}
 
         it "has stop state" $
@@ -82,7 +81,7 @@ basics =
 
         it "has side-effect" $
           let
-              incl = arr $ fmap (+1)
+              incl = evMap (+1)
 
               -- doublerで信号が2つに分岐する。
               -- このとき、副作用は1つ目の信号について末尾まで
@@ -110,15 +109,15 @@ basics =
           let
               split2' = fmap fst &&& fmap snd
               gen = arr (fmap $ \x -> [x, x]) >>> fork >>> arr split2'
-              r1 = runKI (run (gen >>> arr fst)) (l::[(Int, [Int])])
-              r2 = runKI (run (gen >>> second (fork >>> echo) >>> arr fst))
+              r1 = run (gen >>> arr fst) (l::[(Int, [Int])])
+              r2 = run (gen >>> second (fork >>> repeatedly (await >>= yield)) >>> arr fst)
                    (l::[(Int, [Int])])
             in
               r1 == r2
 
         it "is lazy for individual input values" $
           do
-            let l = runOn (\x -> [x]) Cat.id (take 10 $ repeat undefined)
+            let l = runKI (runOn (\x -> [x]) Cat.id) (take 10 $ repeat undefined)
             length l `shouldBe` 10
 
 {-
@@ -410,7 +409,7 @@ utility =
             let
                 pa = proc x ->
                   do
-                    r1 <- P.filter $ arr (\x -> x `mod` 3 == 0) -< x
+                    r1 <- P.filterEvent (\x -> x `mod` 3 == 0) -< x
                     r2 <- stopped -< x::Event Int
                     r3 <- returnA -< r2
                     fin <- gather -< [r1, r2, r3]
@@ -536,37 +535,46 @@ execution = describe "Execution of ProcessA" $
               yield (x+5)
           init = construct pl
 
+          pl2 =
+            do
+              _ <- await
+              return ()
+          init2 = construct pl2
+
       it "supports step execution" $
         do
-          let
-              (ret, now) = stepRun init 1
+          -- execution part
+          --   x <- await
+          --   yield x
+          --   yield (x+1)
+          (ret, now) <- stepRun init 1
           yields ret `shouldBe` [1, 2]
+          hasConsumed ret `shouldBe` True
           hasStopped ret `shouldBe` False
 
-          let
-              (ret, now2) = stepRun now 1
+          -- execution part
+          --   x <- await
+          --   yield x
+          --   yield (x+1)
+          --   yield (x+5)
+          (ret, now) <- stepRun now 1
           yields ret `shouldBe` [1, 2, 6]
+          hasConsumed ret `shouldBe` True
           hasStopped ret `shouldBe` True
 
-          let
-              (ret, _) = stepRun now2 1
+          -- no execution part is left
+          (ret, _) <- stepRun now 1
           yields ret `shouldBe` ([]::[Int])
+          hasConsumed ret `shouldBe` False
           hasStopped ret `shouldBe` True
 
-      it "supports step execution (2)" $
-          pendingWith "Correct stop handling"
-{-
-      prop "supports step execution (2)" $ \p l ->
-          let
-              pa = mkProc p
-              all pc (x:xs) ys =
-                do
-                  (r, cont) <- runKleisli (stepRun pc) x
-                  all cont (if hasStopped r then [] else xs) (ys ++ yields r)
-              all pc [] ys = runKleisli (run pc) [] >>= return . (ys++)
-            in
-              runState (all pa (l::[Int]) []) [] == stateProc pa l
--}
+          -- execution part
+          --   _ <- await
+          --   return ()
+          (ret, now) <- stepRun init2 1
+          yields ret `shouldBe` ([]::[Int])
+          hasConsumed ret `shouldBe` True
+          hasStopped ret `shouldBe` True
 
       it "supports yield-driven step" $
         do
@@ -574,23 +582,59 @@ execution = describe "Execution of ProcessA" $
               init = construct $
                 do
                   yield (-1)
+                  _ <- await
                   x <- await
                   mapM yield (iterate (+1) x) -- infinite
+              init2 = construct $
+                do
+                  return ()
+              init3 = construct $
+                do
+                  _ <- await
+                  return ()
 
-              (ret, now) = stepYield init 5
+          -- execution part
+          --   yield (-1)
+          (ret, now) <- stepYield init 5
           yields ret `shouldBe` Just (-1)
           hasConsumed ret `shouldBe` False
           hasStopped ret `shouldBe` False
 
-          let
-              (ret, now2) = stepYield now 10
+          -- execution part
+          --   _ <- await
+          (ret, now) <- stepYield now 6
+          yields ret `shouldBe` Nothing
+          hasConsumed ret `shouldBe` True
+          hasStopped ret `shouldBe` False
+
+          -- execution part
+          --   x <- await
+          --   mapM yield (iterate (+1) x) -- first one
+          (ret, now) <- stepYield now 10
           yields ret `shouldBe` Just 10
           hasConsumed ret `shouldBe` True
           hasStopped ret `shouldBe` False
 
-          let
-              (ret, now3) = stepYield now2 10
+          -- execution part
+          --   mapM yield (iterate (+1) x) -- second one
+          (ret, now) <- stepYield now 10
           yields ret `shouldBe` Just 11
           hasConsumed ret `shouldBe` False
           hasStopped ret `shouldBe` False
+
+          -- execution part
+          --   return ()
+          (ret, _) <- stepYield init2 0
+          yields ret `shouldBe` (Nothing :: Maybe Int)
+          hasConsumed ret `shouldBe` False
+          hasStopped ret `shouldBe` True
+
+          -- execution part
+          --   _ <- await
+          --   return ()
+          (ret, _) <- stepYield init3 0
+          yields ret `shouldBe` (Nothing :: Maybe Int)
+          hasConsumed ret `shouldBe` True
+          hasStopped ret `shouldBe` True
+
 

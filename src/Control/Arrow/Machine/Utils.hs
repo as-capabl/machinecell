@@ -49,9 +49,8 @@ module
         tee,
         gather,
         fork,
-        filter,
-        echo,
-        anytime,
+        fire,
+        fire0,
         par,
         parB,
         oneshot,
@@ -59,7 +58,7 @@ module
         onEnd,
 #if defined(MIN_VERSION_arrows)
         -- * Transformer
-        readerProc
+        -- readerProc
 #endif
      )
 where
@@ -76,7 +75,7 @@ import Control.Applicative
 #if defined(MIN_VERSION_arrows)
 import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
 #endif
-import Control.Arrow.Machine.ArrowUtil
+-- import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
 
 
@@ -84,35 +83,35 @@ import Control.Arrow.Machine.Types
 
 
 hold ::
-    ArrowApply a => b -> ProcessA a (Event b) b
+    Monad m => b -> ProcessT m (Event b) b
 hold old = proc evx ->
   do
     rSwitch (pure old) -< ((), pure <$> evx)
 
 dHold ::
-    ArrowApply a => b -> ProcessA a (Event b) b
+    Monad m => b -> ProcessT m (Event b) b
 dHold old = proc evx ->
   do
     drSwitch (pure old) -< ((), pure <$> evx)
 
 accum ::
-    ArrowApply a => b -> ProcessA a (Event (b->b)) b
+    Monad m => b -> ProcessT m (Event (b->b)) b
 accum x = switch (pure x &&& arr (($x)<$>)) accum'
   where
     accum' y = dSwitch (pure y &&& Cat.id) (const (accum y))
 
 dAccum ::
-    ArrowApply a => b -> ProcessA a (Event (b->b)) b
+    Monad m => b -> ProcessT m (Event (b->b)) b
 dAccum x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 
 
 edge ::
-    (ArrowApply a, Eq b) =>
-    ProcessA a b (Event b)
+    (Monad m, Eq b) =>
+    ProcessT m b (Event b)
 edge = proc x ->
   do
     rec
-        ev <- unsafeExhaust (arr judge) -< (prv, x)
+        ev <- unsafeExhaust (return . judge) -< (prv, x)
         prv <- dHold Nothing -< Just x <$ ev
     returnA -< ev
   where
@@ -198,23 +197,23 @@ edge = proc x ->
 --   run (source [...] >>> af) (repeat ())
 -- @
 source ::
-    (ArrowApply a, Fd.Foldable f) =>
-    f c -> ProcessA a (Event b) (Event c)
+    (Monad m, Fd.Foldable f) =>
+    f c -> ProcessT m (Event b) (Event c)
 source l = construct $ Fd.mapM_ yd l
   where
     yd x = await >> yield x
 
 -- | Provides a blocking event stream.
 blockingSource ::
-    (ArrowApply a, Fd.Foldable f) =>
-    f c -> ProcessA a () (Event c)
+    (Monad m, Fd.Foldable f) =>
+    f c -> ProcessT m () (Event c)
 blockingSource l = pure noEvent >>> construct (Fd.mapM_ yield l)
 
 -- | Make a blocking source interleaved.
 interleave ::
-    ArrowApply a =>
-    ProcessA a () (Event c) ->
-    ProcessA a (Event b) (Event c)
+    Monad m =>
+    ProcessT m () (Event c) ->
+    ProcessT m (Event b) (Event c)
 interleave bs0 = sweep1 (pure () >>> bs0)
   where
     waiting bs r =
@@ -240,9 +239,9 @@ interleave bs0 = sweep1 (pure () >>> bs0)
 
 -- | Make an interleaved source blocking.
 blocking ::
-    ArrowApply a =>
-    ProcessA a (Event ()) (Event c) ->
-    ProcessA a () (Event c)
+    Monad m =>
+    ProcessT m (Event ()) (Event c) ->
+    ProcessT m () (Event c)
 blocking is = dSwitch (blockingSource (repeat ()) >>> is >>> (Cat.id &&& onEnd)) (const stopped)
 
 
@@ -259,7 +258,7 @@ blocking is = dSwitch (blockingSource (repeat ()) >>> is >>> (Cat.id &&& onEnd))
 -- @... \<- gather -\< [Left \<$\> e1, Right \<$\> e2]@
 --
 tee ::
-    ArrowApply a => ProcessA a (Event b1, Event b2) (Event (Either b1 b2))
+    Monad m => ProcessT m (Event b1, Event b2) (Event (Either b1 b2))
 tee = proc (e1, e2) -> gather -< [Left <$> e1, Right <$> e2]
 
 
@@ -267,8 +266,8 @@ tee = proc (e1, e2) -> gather -< [Left <$> e1, Right <$> e2]
 -- |Make multiple event channels into one.
 -- If simultaneous events are given, lefter one is emitted earlier.
 gather ::
-    (ArrowApply a, Fd.Foldable f) =>
-    ProcessA a (f (Event b)) (Event b)
+    (Monad m, Fd.Foldable f) =>
+    ProcessT m (f (Event b)) (Event b)
 gather = arr (Fd.foldMap $ fmap singleton) >>> fork
   where
     singleton x = x NonEmpty.:| []
@@ -276,47 +275,35 @@ gather = arr (Fd.foldMap $ fmap singleton) >>> fork
 
 -- |Given an array-valued event and emit it's values as inidvidual events.
 fork ::
-    (ArrowApply a, Fd.Foldable f) =>
-    ProcessA a (Event (f b)) (Event b)
+    (Monad m, Fd.Foldable f) =>
+    ProcessT m (Event (f b)) (Event b)
 
 fork = repeatedly $
     await >>= Fd.mapM_ yield
 
 -- |Executes an action once per an input event is provided.
-anytime ::
-    ArrowApply a =>
-    a b c ->
-    ProcessA a (Event b) (Event c)
-
-anytime action = repeatedlyT (ary0 unArrowMonad) $
+fire ::
+    Monad m =>
+    (b -> m c) ->
+    ProcessT m (Event b) (Event c)
+fire fmy = repeatedlyT $
   do
     x <- await
-    ret <- lift $ arrowMonad action x
-    yield ret
+    y <- lift $ fmy x
+    yield y
 
-
-filter ::
-    ArrowApply a =>
-    a b Bool ->
-    ProcessA a (Event b) (Event b)
-filter cond = repeatedlyT (ary0 unArrowMonad) $
-  do
-    x <- await
-    b <- lift $ arrowMonad cond x
-    if b then yield x else return ()
-
-
-echo ::
-    ArrowApply a =>
-    ProcessA a (Event b) (Event b)
-
-echo = filter (arr (const True))
+-- |Executes an action once per an input event is provided.
+fire0 ::
+    Monad m =>
+    m c ->
+    ProcessT m (Event ()) (Event c)
+fire0 = fire  . const
 
 -- |Emit an event of given value as soon as possible.
 oneshot ::
-    ArrowApply a =>
+    Monad m =>
     c ->
-    ProcessA a b (Event c)
+    ProcessT m b (Event c)
 oneshot x = arr (const noEvent) >>> go
   where
     go = construct $
@@ -328,14 +315,14 @@ oneshot x = arr (const noEvent) >>> go
 --  now = oneshot ()
 -- @
 now ::
-    ArrowApply a =>
-    ProcessA a b (Event ())
+    Monad m =>
+    ProcessT m b (Event ())
 now = oneshot ()
 
 -- |Emit an event at the end of the input stream.
 onEnd ::
-    (ArrowApply a, Occasional' b) =>
-    ProcessA a b (Event ())
+    (Monad m, Occasional' b) =>
+    ProcessT m b (Event ())
 onEnd = arr collapse >>> go
   where
     go = repeatedly $
@@ -343,13 +330,15 @@ onEnd = arr collapse >>> go
 
 
 #if defined(MIN_VERSION_arrows)
+{-
 -- | Run reader of base arrow.
 readerProc ::
-    (ArrowApply a, ArrowApply a', ArrowAddReader r a a') =>
-    ProcessA a b c ->
-    ProcessA a' (b, r) c
+    (Monad m, Monad m', ArrowAddReader r a a') =>
+    ProcessT m b c ->
+    ProcessT m' (b, r) c
 readerProc pa = arr swap >>> fitW snd (\ar -> arr swap >>> elimReader ar) pa
   where
     swap :: (a, b) -> (b, a)
     swap ~(a, b) = (b, a)
+-}
 #endif

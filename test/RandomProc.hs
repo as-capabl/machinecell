@@ -23,7 +23,7 @@ import Data.Foldable (foldMap)
 data ProcJoin = PjFst ProcGen | PjSnd ProcGen | PjSum ProcGen
               deriving Show
 
-data ProcGen = PgNop | 
+data ProcGen = PgNop |
                PgStop |
                PgPush ProcGen |
                PgPop (ProcGen, ProcGen) ProcJoin |
@@ -40,7 +40,7 @@ instance
                       liftM PjSnd arbitrary,
                       liftM PjSum arbitrary]
 
-instance 
+instance
     Arbitrary ProcGen
   where
     arbitrary = sized $ \i ->
@@ -48,8 +48,8 @@ instance
       where
         rest = return PgNop
         content = oneof [
-                   return PgNop, 
-                   return PgStop, 
+                   return PgNop,
+                   return PgStop,
                    liftM PgPush arbitrary,
                    liftM2 PgPop arbitrary arbitrary,
                    liftM PgOdd arbitrary,
@@ -57,9 +57,9 @@ instance
                    liftM PgIncl arbitrary,
                    liftM PgHarf arbitrary
                   ]
-type MyProcT = ProcessA (Kleisli (State [Int]))
+type MyProcT = ProcessT (State [Int])
 
-mkProc :: ProcGen 
+mkProc :: ProcGen
        -> MyProcT (Event Int) (Event Int)
 
 
@@ -67,7 +67,7 @@ mkProc PgNop = Cat.id
 
 mkProc (PgPush next) = mc >>> mkProc next
   where
-    mc = repeatedlyT kleisli0 $
+    mc = repeatedlyT $
        do
          x <- await
          lift $ modify (\xs -> x:xs)
@@ -77,20 +77,20 @@ mkProc (PgPop (fx, fy) fz) =
     mc >>> ((evMap fst >>> fork) &&& (evMap snd >>> fork))
        >>> (mkProc fx *** mkProc fy) >>> mkProcJ fz
   where
-    mc = repeatedlyT kleisli0 $
+    mc = repeatedlyT $
        do
          x <- await
          ys <- lift $ get
-         case ys 
+         case ys
            of
-             [] -> 
+             [] ->
                  yield (Just x, Nothing)
-             (y:yss) -> 
-               do 
+             (y:yss) ->
+               do
                  lift $ put yss
                  yield (Just x, Just y)
 
-mkProc (PgOdd next) = P.filter (arr cond) >>> mkProc next
+mkProc (PgOdd next) = P.filterEvent cond >>> mkProc next
   where
     cond x = x `mod` 2 == 1
 
@@ -111,21 +111,10 @@ mkProcJ (PjSum pg) = proc (evx, evy) ->
 
 
 stateProc :: MyProcT (Event a) (Event b) -> [a] -> ([b], [Int])
-stateProc a i = 
-    runState mx []
-{-
-    unsafePerformIO $ 
-      do
-        x <- timeout 10000 $
-          do
-            let x = runState mx []
-            deepseq x $ return x
-        return (fromJust x)
--}
-  where
-    mx = runKleisli (run a) i
+stateProc a i =
+    runState (runT a i) []
 
-class 
+class
     TestIn a
   where
     input :: MyProcT (Event Int) a
@@ -148,7 +137,7 @@ instance
 instance
     (TestIn a, TestIn b) => TestIn (a, b)
   where
-    input = mc >>> 
+    input = mc >>>
         ((evMap fst >>> fork >>> input) &&& (evMap snd >>> fork >>> input))
       where
         mc = repeatedly $
@@ -167,13 +156,13 @@ instance
         gather -< [y1, y2]
 
 instance
-    (TestIn a, TestIn b) => 
+    (TestIn a, TestIn b) =>
         TestIn (Either a b)
   where
     input = proc evx ->
       do
         -- 一個前の値で分岐してみる
-        b <- dHold True -< 
+        b <- dHold True -<
                (\x -> x `mod` 2 == 0) <$> evx
 
         if b
@@ -215,7 +204,8 @@ mkEquivTest (Just (par, j), pre, post, l) pa pb =
         x == y
 
 mkEquivTest2 ::(Maybe (ProcGen, ProcJoin), ProcGen, ProcGen, [Int]) ->
-               MyProcT (Event Int, Event Int) (Event Int, Event Int) -> 
+               MyProcT (Event Int, Event Int) (Event Int, Event Int) ->
                MyProcT (Event Int, Event Int) (Event Int, Event Int) ->
                Bool
 mkEquivTest2 = mkEquivTest
+

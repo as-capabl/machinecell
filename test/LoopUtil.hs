@@ -26,35 +26,35 @@ loopUtil =
       do
         it "is possible that value by `dHold` or `dAccum` can refer at upstream." $
           do
-            let 
-                pa :: ProcessA (Kleisli IO) (Event Int) (Event Int)
+            let
+                pa :: ProcessT IO (Event Int) (Event Int)
                 pa = proc evx ->
                   do
                     rec
-                        anytime (Kleisli print) -< y <$ evx
-                        anytime (Kleisli putStr) -< "" <$ evx -- side effect
+                        P.fire print -< y <$ evx
+                        P.fire putStr -< "" <$ evx -- side effect
                         evx2 <- doubler -< evx
                         y <- P.dAccum 0 -< (+) <$> evx2
                     returnA -< y <$ evx
-            ret <- liftIO $ runKleisli (P.run pa) [1, 2, 3]
+            ret <- liftIO $ P.runT pa [1, 2, 3]
             ret `shouldBe` [0, 1+1, 1+1+2+2]
-  
+
     describe "Pump" $
       do
         it "pumps up an event stream." $
           do
             let
-                pa :: ProcessA (Kleisli IO) (Event Int) (Event Int)
+                pa :: ProcessT IO (Event Int) (Event Int)
                 pa = proc evx ->
                   do
                     rec
                         evOut <- Pump.outlet -< (dct, () <$ evx)
-                        anytime (Kleisli putStr) -< "" <$ evx -- side effect
+                        fire putStr -< "" <$ evx -- side effect
                         so <- doubler -< evx
                         dct <- Pump.intake -< (so, () <$ evx)
                     returnA -< evOut
 
-            ret <- liftIO $ runKleisli (P.run pa) [4, 5, 6]
+            ret <- liftIO $ P.runT pa [4, 5, 6]
             ret `shouldBe` [4, 4, 5, 5, 6, 6]
 
 
