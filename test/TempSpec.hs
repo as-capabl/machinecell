@@ -85,8 +85,8 @@ utility =
             let
                 pa = proc x ->
                   do
-                    r1 <- P.filterEvent (\x -> x `mod` 3 == 0) -< x
-                    r2 <- stopped -< x::Event Int
+                    r1 <- P.filterEvent (\x -> x `mod` 3 == 0) -< x :: Event Int
+                    r2 <- stopped -< x
                     r3 <- returnA -< r2
                     fin <- gather -< [r1, r2, r3]
                     val <- hold 0 -< r1

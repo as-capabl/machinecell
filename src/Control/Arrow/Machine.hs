@@ -37,13 +37,18 @@ import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Utils
 
+-- $setup
+-- >>> :set -XArrows
+-- >>> import Control.Arrow
+-- >>> import Control.Monad.Trans
+
 -- $introduction
 -- As other iteratee or pipe libraries, machinecell abstracts general iteration processes.
 --
 -- Here is an example that is a simple iteration over a list.
 --
 -- >>> run (evMap (+1)) [1, 2, 3]
--- [2, 3, 4]
+-- [2,3,4]
 --
 -- In above statement, "`evMap` (+1)" has a type "ProcessA (-\>) (Event Int) (Event Int)",
 -- which denotes "A stream transducer that takes a series of Int as input,
@@ -58,13 +63,13 @@ import Control.Arrow.Machine.Utils
 --
 -- ProcessA can run the effects as following.
 --
--- >>> runKleisli (run_ $ anytime (Kleisli print)) [1, 2, 3]
+-- >>> runT_ (fire print) [1, 2, 3]
 -- 1
 -- 2
 -- 3
 --
---  Where `anytime` makes a transducer that executes side effects for each input.
--- `run_` is almost same as `run` but discards transducer's output.
+--  Where `fire` makes a transducer that executes side effects for each input.
+-- `runT_` is almost same as `run` but discards transducer's output.
 --
 -- That is useful in the case rather side effects are main concern.
 --
@@ -76,33 +81,23 @@ import Control.Arrow.Machine.Utils
 -- In `Plan` monad context, `await` and `yield` can be used to get and emit values.
 -- And actions of base monads can be `lift`ed to the context.
 --
--- @
--- source :: ProcessA (Kleisli IO) (Event ()) (Event String)
--- source = repeatedlyT kleisli0 $
---   do
---     _ \<- await
---     x \<- lift getLine
---     yield x
---
--- pipe :: ArrowApply a =\> ProcessA a (Event String) (Event String)
--- pipe = construct $
---   do
---     s1 \<- await
---     s2 \<- await
---     yield (s1 ++ s2)
---
--- sink :: ProcessA (Kleisli IO) (Event String) (Event Void)
--- sink = repeatedlyT kleisli0
---   do
---     x \<- await
---     lift $ putStrLn x
--- @
---
 -- Then, resulting processes are composed as `Category` using `(\>\>\>)` operator.
 --
--- > runKleisli (run_ $ source >>> pipe >>> sink) (repeat ())
---
--- This reads two lines from stdin, puts a concatenated line to stdout and finishes.
+-- >>> :{
+-- let mySource = source [1..]
+--     myPipe = construct $
+--       do
+--         s1 <- await
+--         s2 <- await
+--         yield (s1 + s2)
+--     mySink = repeatedlyT $
+--       do
+--         x <- await
+--         lift $ print x
+--   in
+--     runT_ (mySource >>> myPipe >>> mySink) (repeat ())
+-- :}
+-- 3
 --
 -- Unlike other pipe libraries, even the source calls `await`.
 -- The source awaits dummy input, namely "(repeat ())", and discard input values.
@@ -142,20 +137,19 @@ import Control.Arrow.Machine.Utils
 --
 -- If a type has an `Arrow` instance, it can be wrote by ghc extended proc-do notation as following.
 --
--- @
--- f :: ProcessA (Kleisli IO) (Event Int) (Event ())
--- f = proc x -\>
---   do
---     -- Process odd integers.
---     odds \<- filter $ arr odd -\< x
---     anytime $ Kleisli (putStrLn . ("Odd: " ++)) -\< show \<$\> odds
---
---     -- Process even integers.
---     evens \<- filter $ arr even -\< x
---     anytime $ Kleisli (putStrLn . ("Even: " ++)) -\< show \<$\> evens
--- @
---
--- >>> P.runKleisli (run f) [1..10]
+-- >>> :{
+-- let f :: ProcessT IO (Event Int) (Event ())
+--     f = proc x ->
+--       do
+--         -- Process odd integers.
+--         odds <- filterEvent odd -< x
+--         fire (putStrLn . ("Odd: " ++)) -< show <$> odds
+--         -- Process even integers.
+--         evens <- filterEvent even -< x
+--         fire (putStrLn . ("Even: " ++)) -< show <$> evens
+--   in
+--     runT_ f [1..10]
+-- :}
 -- Odd: 1
 -- Even: 2
 -- Odd: 3
@@ -195,16 +189,15 @@ import Control.Arrow.Machine.Utils
 --
 -- An example is below.
 --
--- @
--- f :: ArrowApply a =\> ProcessA a (Event Int) (Event Int)
--- f = proc x -\>
---    do
---      y \<- accum 0 -\< (+) \<$\> x
---      returnA -\< y \<$ x
--- @
---
--- >>> run f [1, 2, 3]
--- [1, 3, 6]
+-- >>> :{
+-- let f = proc x ->
+--       do
+--         y <- accum 0 -< (+) <$> x
+--         returnA -< y <$ x
+--   in
+--     run f [1, 2, 3]
+-- :}
+-- [1,3,6]
 --
 -- `(\<$)` operator discards the value of rhs and only uses that's container structure
 -- e.g. 1 \<$ Just "a" =\> Just 1, 1 \<$ Nothing =\> Nothing,
@@ -262,19 +255,17 @@ import Control.Arrow.Machine.Utils
 --
 -- In example below, result is [0, 0, 0, 0], not [1, 2, 3, 4].
 --
--- @
--- f = proc x -\>
---   do
---     rec
---         b \<- hold 0 -\< y
---         y \<- fork -\< (\xx -\> [xx, xx+1, xx+2, xx+3]) \<$\> x
---     returnA -\< b \<$ y
---
--- dHold i = proc x -\> drSwitch (pure i) -\< ((), pure \<$\> x)
--- @
---
--- >>> run f [1]
--- [0, 0, 0, 0]
+-- >>> :{
+-- let f = proc x ->
+--       do
+--         rec
+--             b <- hold 0 -< y
+--             y <- fork -< (\xx -> [xx, xx+1, xx+2, xx+3]) <$> x
+--         returnA -< b <$ y
+--   in
+--     run f [1]
+-- :}
+-- [0,0,0,0]
 --
 -- In general, `Event` values refered at upstream in rec statements are
 -- almost always `NoEvent`s.

@@ -57,8 +57,8 @@ This module provides an abstraction that continuous values with
 finite number of changing points.
 
 >>> import qualified Control.Arrow.Machine.Misc.Discrete as D
->>> run (D.hold "apple" >>> D.arr reverse >>> D.edge) ["orange", "grape"]
-["elppa", "egnaro", "eparg"]
+>>> P.run (D.hold "apple" >>> D.arr reverse >>> D.edge) ["orange", "grape"]
+["elppa","egnaro","eparg"]
 
 In above example, input data of "reverse" is continuous.
 But the "D.edge" transducer extracts changing points without calling string comparison.
