@@ -616,16 +616,28 @@ filterJust = arr filterJust'
     filterJust' NoEvent = NoEvent
     filterJust' End = End
 
+-- |Split event
+-- >>> run (filterLeft) [Left 1, Right 2, Left 3, Right 4]
+-- [1,3]
 filterLeft ::
     Arrow ar =>
     ar (Event (Either a b)) (Event a)
 filterLeft = filterJust <<< evMap (either Just (const Nothing))
 
+-- |Split event
+-- >>> run filterRight [Left 1, Right 2, Left 3, Right 4]
+-- [2,4]
 filterRight ::
     Arrow ar =>
     ar (Event (Either a b)) (Event b)
 filterRight = filterJust <<< evMap (either (const Nothing) Just)
 
+-- |Split event
+-- >>> run (splitEvent >>> arr fst) [Left 1, Right 2, Left 3, Right 4]
+-- [1,3]
+--
+-- >>> run (splitEvent >>> arr snd) [Left 1, Right 2, Left 3, Right 4]
+-- [2,4]
 splitEvent ::
     Arrow ar =>
     ar (Event (Either a b)) (Event a, Event b)
@@ -834,6 +846,20 @@ repeatedly = construct . forever
 --
 -- Switches
 --
+
+-- |Run the 1st transducer at the beggining. Then switch to 2nd when Event t occurs.
+--
+-- >>> :{
+-- let
+--     before = proc x ->
+--       do
+--         trigger <- filterEvent (== 3) -< x
+--         returnA -< ((*10) <$> x, trigger)
+--     after t = proc x -> returnA -< (*100) <$> x
+--  in
+--     run (switch before after) [1..5]
+-- :}
+-- [10,20,300,400,500]
 switch ::
     Monad m =>
     ProcessT m b (c, Event t) ->
@@ -842,6 +868,19 @@ switch ::
 switch sf k = ggSwitch (const ()) sf (\() -> k)
 
 
+-- |Delayed version of `switch`
+--
+-- >>> :{
+-- let
+--     before = proc x ->
+--       do
+--         trigger <- filterEvent (== 3) -< x
+--         returnA -< ((*10) <$> x, trigger)
+--     after t = proc x -> returnA -< (*100) <$> x
+--  in
+--     run (dSwitch before after) [1..5]
+-- :}
+-- [10,20,30,400,500]
 dSwitch ::
     Monad m =>
     ProcessT m b (c, Event t) ->
@@ -849,7 +888,23 @@ dSwitch ::
     ProcessT m b c
 dSwitch sf k = dggSwitch (const ()) sf (\() -> k)
 
-
+-- |Recurring switch.
+--
+-- >>> :{
+-- let pa = proc evtp ->
+--       do
+--         evx <- returnA -< fst <$> evtp
+--         evarr <- filterJust -< snd <$> evtp
+--         rSwitch (evMap (*10)) -< (evx, evarr)
+--     l = [(1, Nothing),
+--          (2, Just (arr $ fmap (*100))),
+--          (3, Nothing),
+--          (4, Just (arr $ fmap (*1000))),
+--          (5, Nothing)]
+--   in
+--     run pa l
+-- :}
+-- [10,200,300,4000,5000]
 rSwitch ::
     Monad m =>
     ProcessT m b c ->
@@ -861,6 +916,23 @@ rSwitch p = rSwitch' (p *** Cat.id) >>> arr fst
     test = proc (_, (_, r)) -> returnA -< r
 
 
+-- |Delayed version of `rSwitch`.
+--
+-- >>> :{
+-- let pa = proc evtp ->
+--       do
+--         evx <- returnA -< fst <$> evtp
+--         evarr <- filterJust -< snd <$> evtp
+--         drSwitch (evMap (*10)) -< (evx, evarr)
+--     l = [(1, Nothing),
+--          (2, Just (arr $ fmap (*100))),
+--          (3, Nothing),
+--          (4, Just (arr $ fmap (*1000))),
+--          (5, Nothing)]
+--   in
+--     run pa l
+-- :}
+-- [10,20,300,400,5000]
 drSwitch ::
     Monad m => ProcessT m b c ->
     ProcessT m (b, Event (ProcessT m b c)) c

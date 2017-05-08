@@ -78,7 +78,8 @@ import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
 -- import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
 
-
+-- $setup
+-- >>> :set -XArrows
 
 
 
@@ -94,17 +95,45 @@ dHold old = proc evx ->
   do
     drSwitch (pure old) -< ((), pure <$> evx)
 
+-- | Accumulate inputs like fold.
+-- >>> :{
+-- let pa = proc evx ->
+--       do
+--         val <- accum 0 -< (+1) <$ evx
+--         returnA -< val <$ evx
+--   in
+--     run pa (replicate 10 ())
+-- :}
+-- [1,2,3,4,5,6,7,8,9,10]
+
 accum ::
     Monad m => b -> ProcessT m (Event (b->b)) b
 accum x = switch (pure x &&& arr (($x)<$>)) accum'
   where
     accum' y = dSwitch (pure y &&& Cat.id) (const (accum y))
 
+-- | Delayed version of `accum`.
+-- >>> :{
+-- let pa = proc evx ->
+--       do
+--         val <- dAccum 0 -< (+1) <$ evx
+--         returnA -< val <$ evx
+--   in
+--     run pa (replicate 10 ())
+-- :}
+-- [0,1,2,3,4,5,6,7,8,9]
 dAccum ::
     Monad m => b -> ProcessT m (Event (b->b)) b
 dAccum x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 
 
+-- |Detects edges of input behaviour.
+--
+-- >>> run (hold 0 >>> edge) [1, 1, 2, 2, 2, 3]
+-- [0,1,2,3]
+--
+-- >>> run (hold 0 >>> edge) [0, 1, 1, 2, 2, 2, 3]
+-- [0,1,2,3]
 edge ::
     (Monad m, Eq b) =>
     ProcessT m b (Event b)
@@ -265,6 +294,35 @@ tee = proc (e1, e2) -> gather -< [Left <$> e1, Right <$> e2]
 
 -- |Make multiple event channels into one.
 -- If simultaneous events are given, lefter one is emitted earlier.
+--
+-- >>> :{
+-- let pa = proc x ->
+--       do
+--         r1 <- filterEvent (\x -> x `mod` 2 == 0) -< x
+--         r2 <- filterEvent (\x -> x `mod` 3 == 0) -< x
+--         gather -< [r1, r2]
+--   in
+--     run pa [1..6]
+-- :}
+-- [2,3,4,6,6]
+--
+-- It is terminated when the last input finishes.
+--
+-- >>> :{
+-- let pa = proc x ->
+--       do
+--         r1 <- filterEvent (\x -> x `mod` 3 == 0) -< x :: Event Int
+--         r2 <- stopped -< x
+--         r3 <- returnA -< r2
+--         fin <- gather -< [r1, r2, r3]
+--         val <- hold 0 -< r1
+--         end <- onEnd -< fin
+--         returnA -< val <$ end
+--   in
+--     run pa [1..5]
+-- :}
+-- [3]
+
 gather ::
     (Monad m, Fd.Foldable f) =>
     ProcessT m (f (Event b)) (Event b)
@@ -274,6 +332,9 @@ gather = arr (Fd.foldMap $ fmap singleton) >>> fork
 
 
 -- |Given an array-valued event and emit it's values as inidvidual events.
+--
+-- >>> run fork [[1,2,3],[],[4,5]]
+-- [1,2,3,4,5]
 fork ::
     (Monad m, Fd.Foldable f) =>
     ProcessT m (Event (f b)) (Event b)
@@ -320,6 +381,17 @@ now ::
 now = oneshot ()
 
 -- |Emit an event at the end of the input stream.
+-- >>> :{
+-- let
+--     pa = proc evx ->
+--       do
+--         x <- hold 0 -< evx
+--         ed <- onEnd -< evx
+--         returnA -< x <$ ed
+--   in
+--     run pa [1..10]
+-- :}
+-- [10]
 onEnd ::
     (Monad m, Occasional' b) =>
     ProcessT m b (Event ())
