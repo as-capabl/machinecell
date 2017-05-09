@@ -7,7 +7,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module
-    TempSpec
+    Utils.SourceSpec
 where
 
 import Data.Maybe (fromMaybe)
@@ -27,26 +27,7 @@ import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 
 import Common.RandomProc
 
-
-runKI fmy x = runIdentity (fmy x)
-
 spec =
-  do
-    switches
-    source
-
-switches =
-  do
-    describe "kSwitch" $
-      do
-        it "switches spontaneously" $
-          do
-            let
-                theArrow sw = sw (oneshot False) (arr snd) $ \_ _ -> oneshot True
-            run (theArrow kSwitch) [] `shouldBe` [True]
-            run (theArrow dkSwitch) [] `shouldBe` [False, True]
-
-source =
   do
     describe "source" $
       do
