@@ -100,7 +100,7 @@ spec =
 
     it "is lazy for individual input values" $
       do
-        let l = runIdentity $ runOn (\x -> [x]) Cat.id (take 10 $ repeat undefined)
+        let l = run Cat.id (take 10 $ repeat undefined)
         length l `shouldBe` 10
 
 {-

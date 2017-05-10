@@ -16,6 +16,8 @@ import qualified Control.Arrow.Machine.Misc.Pump as Pump
 
 import Data.Monoid (Endo(Endo), mappend, appEndo)
 
+import Data.IORef
+
 newtype Duct a = Duct (Endo [a])
 
 doubler = arr (fmap $ \x -> [x, x]) >>> P.fork
@@ -24,18 +26,20 @@ spec =
   do
     it "pumps up an event stream." $
       do
+        ref <- newIORef ([] :: [Int])
         let
-            pa :: ProcessT IO (Event Int) (Event Int)
+            pa :: ProcessT IO (Event Int) (Event ())
             pa = proc evx ->
               do
                 rec
                     evOut <- Pump.outlet -< (dct, () <$ evx)
-                    fire putStr -< "" <$ evx -- side effect
+                    fire (putStr) -< "" <$ evx -- side effect
                     so <- doubler -< evx
                     dct <- Pump.intake -< (so, () <$ evx)
-                returnA -< evOut
+                fire (\x -> modifyIORef ref (x:)) -< evOut
 
-        ret <- liftIO $ P.runT pa [4, 5, 6]
-        ret `shouldBe` [4, 4, 5, 5, 6, 6]
+        liftIO $ P.runT_ pa [4, 5, 6]
+        ret <- readIORef ref
+        reverse ret `shouldBe` [4, 4, 5, 5, 6, 6]
 
 

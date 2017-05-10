@@ -14,6 +14,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.State
+import Control.Monad.Writer
 import Test.QuickCheck (Arbitrary, arbitrary, oneof, frequency, sized)
 import Data.Maybe (fromJust)
 import Data.Monoid (Sum(..), getSum, mappend)
@@ -111,8 +112,8 @@ mkProcJ (PjSum pg) = proc (evx, evy) ->
 
 
 stateProc :: MyProcT (Event a) (Event b) -> [a] -> ([b], [Int])
-stateProc a i =
-    runState (runT a i) []
+stateProc pa i =
+    runState (execWriterT $ runT (\x -> tell [x]) (fit lift pa) i) []
 
 class
     TestIn a

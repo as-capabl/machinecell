@@ -11,6 +11,8 @@ import Test.Hspec
 import Control.Arrow.Machine as P
 import Control.Monad.Trans (liftIO)
 
+import Data.IORef
+
 import Common.RandomProc
 
 doubler = arr (fmap $ \x -> [x, x]) >>> P.fork
@@ -19,8 +21,9 @@ spec =
   do
     it "is possible that value by `dHold` or `dAccum` can refer at upstream." $
       do
+        ref <- newIORef ([] :: [Int])
         let
-            pa :: ProcessT IO (Event Int) (Event Int)
+            pa :: ProcessT IO (Event Int) (Event ())
             pa = proc evx ->
               do
                 rec
@@ -28,9 +31,11 @@ spec =
                     P.fire putStr -< "" <$ evx -- side effect
                     evx2 <- doubler -< evx
                     y <- P.dAccum 0 -< (+) <$> evx2
-                returnA -< y <$ evx
-        ret <- liftIO $ P.runT pa [1, 2, 3]
-        ret `shouldBe` [0, 1+1, 1+1+2+2]
+                fire (\x -> modifyIORef ref (x:)) -<  y <$ evx
+
+        liftIO $ P.runT_ pa [1, 2, 3]
+        ret <- readIORef ref
+        reverse ret `shouldBe` [0, 1+1, 1+1+2+2]
 
     it "can be used with rec statement(pure)" $
       let

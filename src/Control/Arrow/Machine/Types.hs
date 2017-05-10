@@ -58,7 +58,6 @@ module
         repeatedly,
 
         -- * Running machines (at once)
-        runOn,
         runT,
         runT_,
         run,
@@ -1339,24 +1338,24 @@ sweepR =
 
 
 sweepAll ::
-    (Monoid r, Monad m) =>
-    (o->r) ->
-    ContT Bool (StateT r (RM i (Event o) m)) ()
+    Monad m =>
+    (o -> m ()) ->
+    ContT Bool (RM i (Event o) m) ()
 sweepAll outpre =
     callCC $ \sus -> forever $ cond sus >> body
   where
     cond sus =
       do
-        ph <- lift $ lift $ gets getPhaseRI
+        ph <- lift $ gets getPhaseRI
         if ph == Suspend then sus () else return ()
     body =
       do
-        evx <- lift $ lift $ sweepR
+        evx <- lift $ sweepR
         case evx
           of
             Event x ->
               do
-                lift $ modify' (`mappend` outpre x)
+                lift $ lift $ outpre x
             NoEvent ->
                 return ()
             End ->
@@ -1367,13 +1366,13 @@ breakCont = ContT . const . return
 
 
 -- | Run a machine with results concatenated in terms of a monoid.
-runOn ::
-    (Monad m, Monoid r, Fd.Foldable f) =>
-    (c -> r) ->
+runT ::
+    (Monad m, Fd.Foldable f) =>
+    (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
-    f b -> m r
-runOn outpre pa0 xs =
-    runRM pa0 $ execStateT `flip` mempty $
+    f b -> m ()
+runT outpre pa0 xs =
+    runRM pa0 $
       do
         _ <- evalContT $
           do
@@ -1386,49 +1385,37 @@ runOn outpre pa0 xs =
             return True
 
         -- Terminate.
-        _ <- lift $ feed_ End End
+        _ <- feed_ End End
         evalContT $ sweepAll outpre >> return True
-
+        return ()
   where
     feedSweep x =
       do
-        _ <- lift $ lift $ feedR x
+        _ <- lift $ feedR x
         sweepAll outpre
 
 
-newtype Builder a = Builder {
-    unBuilder :: forall b. (a -> b -> b) -> b -> b
-  }
-instance
-    Monoid (Builder a)
-  where
-    mempty = Builder $ \_ e -> e
-    Builder g `mappend` Builder f =
-        Builder $ \c e -> g c (f c e)
+type Builder b = F.F ((,) b)
 
--- | Run a machine.
-runT ::
-    Monad m =>
-    ProcessT m (Event b) (Event c) ->
-    [b] -> m [c]
-runT pa l =
-  do
-    r <- runOn (\x -> Builder $ \c e -> c x e) pa l
-    return $ build (unBuilder r)
+putB :: b -> Builder b ()
+putB x = F.liftF (x, ())
+
+bToList :: Builder b a -> [b]
+bToList x = build $ \cons nil -> F.runF x (const nil) (uncurry cons)
 
 -- | Run a machine discarding all results.
 runT_ ::
-    Monad m =>
-    ProcessT m (Event b) (Event c) ->
-    [b] -> m ()
+    (Monad m, Foldable f) =>
+    ProcessT m (Event a) (Event b) ->
+    f a -> m ()
 runT_ pa l =
-    runOn (const ()) pa l
+    runT (const $ return ()) pa l
 
 run ::
-    ArrowApply a =>
-    ProcessA a (Event b) (Event c) ->
-    a [b] [c]
-run pa = unArrowMonad (runT pa)
+    Foldable f =>
+    ProcessT Identity (Event a) (Event b) ->
+    f a -> [b]
+run pa = bToList . runT putB (fit lift pa)
 
 
 -- | Represents return values and informations of step executions.
@@ -1459,9 +1446,11 @@ stepRun ::
     Monad m =>
     ProcessT m (Event b) (Event c) ->
     b -> m (ExecInfo [c], ProcessT m (Event b) (Event c))
+stepRun = undefined
+{-
 stepRun pa0 = \x ->
   do
-    ((csmd, ct, pa), r)  <- runRM pa0 $ runStateT `flip` mempty $
+    ((csmd, ct, pa), r)  <- runStateT `flip` mempty $ runRM pa0 $
       do
         csmd <- evalContT $
           do
@@ -1469,21 +1458,21 @@ stepRun pa0 = \x ->
             return True
         ct <- evalContT $
           do
-            _ <- lift $ lift $ feedR x
+            _ <- lift $ feedR x
             sweepAll singleton
             return True
-        pa <- lift $ freeze
+        pa <- freeze
         return (csmd, ct, pa)
     return $ (retval r csmd ct, pa)
   where
-    singleton x = Endo (x:)
+    singleton x = lift $ modify' (`mappend` Endo (x:))
 
     retval r csmd ct = ExecInfo {
         yields = appEndo r [],
         hasConsumed = csmd,
         hasStopped = not ct
       }
-
+-}
 
 -- | Execute until an output produced.
 stepYield ::
