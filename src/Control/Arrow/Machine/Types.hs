@@ -63,7 +63,6 @@ module
         run,
 
         -- * Running machines (step-by-step)
-        ExecInfo(..),
         stepRun,
         stepYield,
 
@@ -1418,35 +1417,17 @@ run ::
 run pa = bToList . runT putB (fit lift pa)
 
 
--- | Represents return values and informations of step executions.
-data ExecInfo fa =
-    ExecInfo
-      {
-        yields :: fa, -- ^ Values yielded while the step.
-        hasConsumed :: Bool, -- ^ True if the input value is consumed.
-            --
-            -- False if the machine has stopped unless consuming the input.
-            --
-            -- Or in the case of `stepYield`, this field become false when
-            -- the machine produces a value unless consuming the input.
-        hasStopped :: Bool -- ^ True if the machine has stopped at the end of the step.
-      }
-    deriving (Eq, Show)
-
-instance
-    Alternative f => Monoid (ExecInfo (f a))
-  where
-    mempty = ExecInfo empty False False
-    ExecInfo y1 c1 s1 `mappend` ExecInfo y2 c2 s2 =
-        ExecInfo (y1 <|> y2) (c1 || c2) (s1 || s2)
 
 
 -- | Execute until an input consumed and the machine suspends.
 stepRun ::
-    Monad m =>
-    ProcessT m (Event b) (Event c) ->
-    b -> m (ExecInfo [c], ProcessT m (Event b) (Event c))
-stepRun = undefined
+    (Monad m, Monad m') =>
+    (forall p. m p -> m' p) ->
+    (b -> m' ()) ->
+    (Maybe a -> m' ()) ->
+    ProcessT m (Event a) (Event b) ->
+    a -> m' (ProcessT m (Event a) (Event b))
+stepRun lft yd stp pa x = undefined
 {-
 stepRun pa0 = \x ->
   do
@@ -1476,9 +1457,14 @@ stepRun pa0 = \x ->
 
 -- | Execute until an output produced.
 stepYield ::
-    Monad m =>
-    ProcessT m (Event b) (Event c) ->
-    b -> m (ExecInfo (Maybe c), ProcessT m (Event b) (Event c))
+    (Monad m, Monad m') =>
+    (forall p. m p -> m' p) ->
+    m' a ->
+    m' () ->
+    ProcessT m (Event a) (Event b) ->
+    m' (Maybe b, ProcessT m (Event a) (Event b))
+stepYield lft aw stp pa = undefined
+{-
 stepYield pa0 = \x -> runRM pa0 $ evalStateT `flip` mempty $
   do
     go x
@@ -1508,3 +1494,4 @@ stepYield pa0 = \x -> runRM pa0 $ evalStateT `flip` mempty $
             End ->
                 modify $ \ri -> ri { hasStopped = True }
 
+-}
