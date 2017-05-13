@@ -1258,10 +1258,10 @@ data RunInfo i o m = RunInfo {
 type RM i o m = StateT (RunInfo i o m) m
 
 runRM ::
-    Monad m =>
+    Monad m' =>
     ProcessT m (Event i) o ->
-    RM (Event i) o m x ->
-    m x
+    StateT (RunInfo (Event i) o m) m' x ->
+    m' x
 runRM pa mx =
     evalStateT mx $
         RunInfo {
@@ -1337,24 +1337,25 @@ sweepR =
 
 
 sweepAll ::
-    Monad m =>
-    (o -> m ()) ->
-    ContT Bool (RM i (Event o) m) ()
-sweepAll outpre =
+    (Monad m, Monad m') =>
+    (forall p. RM i (Event o) m p -> m' p) ->
+    (o -> m' ()) ->
+    ContT Bool m' ()
+sweepAll lft outpre =
     callCC $ \sus -> forever $ cond sus >> body
   where
     cond sus =
       do
-        ph <- lift $ gets getPhaseRI
+        ph <- lift $ lft $ gets getPhaseRI
         if ph == Suspend then sus () else return ()
     body =
       do
-        evx <- lift $ sweepR
+        evx <- lift $ lft $ sweepR
         case evx
           of
             Event x ->
               do
-                lift $ lift $ outpre x
+                lift $ outpre x
             NoEvent ->
                 return ()
             End ->
@@ -1370,13 +1371,13 @@ runT ::
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
-runT outpre pa0 xs =
+runT outpre0 pa0 xs =
     runRM pa0 $
       do
         _ <- evalContT $
           do
             -- Sweep initial events.
-            sweepAll outpre
+            sweepAll id outpre
 
             -- Feed values
             Fd.mapM_ feedSweep xs
@@ -1385,14 +1386,15 @@ runT outpre pa0 xs =
 
         -- Terminate.
         _ <- feed_ End End
-        evalContT $ sweepAll outpre >> return True
+        _ <- evalContT $ sweepAll id outpre >> return True
         return ()
   where
     feedSweep x =
       do
         _ <- lift $ feedR x
-        sweepAll outpre
+        sweepAll id outpre
 
+    outpre = lift . outpre0
 
 type Builder b = F.F ((,) b)
 
@@ -1417,6 +1419,11 @@ run ::
 run pa = bToList . runT putB (fit lift pa)
 
 
+lftRM :: (Monad m, Monad m') =>
+    (forall p. m p -> m' p) ->
+    RM i o m a ->
+    StateT (RunInfo i o m) m' a
+lftRM lft' st = StateT $ \s -> lft' $ runStateT st s
 
 
 -- | Execute until an input consumed and the machine suspends.
@@ -1427,33 +1434,31 @@ stepRun ::
     (Maybe a -> m' ()) ->
     ProcessT m (Event a) (Event b) ->
     a -> m' (ProcessT m (Event a) (Event b))
-stepRun lft yd stp pa x = undefined
-{-
-stepRun pa0 = \x ->
+stepRun lft yd stp pa0 x =
   do
-    ((csmd, ct, pa), r)  <- runStateT `flip` mempty $ runRM pa0 $
+    pa <- runRM pa0 $
       do
         csmd <- evalContT $
           do
-            sweepAll singleton
+            sweepAll (lftRM lft) (lift . yd)
             return True
-        ct <- evalContT $
-          do
-            _ <- lift $ feedR x
-            sweepAll singleton
-            return True
-        pa <- freeze
-        return (csmd, ct, pa)
-    return $ (retval r csmd ct, pa)
+        if csmd
+          then do
+            ct <- evalContT $
+              do
+                _ <- lift $ feedR x
+                sweepAll (lftRM lft) (lift . yd)
+                return True
+            if ct
+              then return ()
+              else lift $ stp $ Nothing
+          else
+            lift $ stp $ Just x
+        pa <- lftRM lft freeze
+        return pa
+    return pa
   where
-    singleton x = lift $ modify' (`mappend` Endo (x:))
 
-    retval r csmd ct = ExecInfo {
-        yields = appEndo r [],
-        hasConsumed = csmd,
-        hasStopped = not ct
-      }
--}
 
 -- | Execute until an output produced.
 stepYield ::
@@ -1463,35 +1468,27 @@ stepYield ::
     m' () ->
     ProcessT m (Event a) (Event b) ->
     m' (Maybe b, ProcessT m (Event a) (Event b))
-stepYield lft aw stp pa = undefined
-{-
-stepYield pa0 = \x -> runRM pa0 $ evalStateT `flip` mempty $
+stepYield lft aw stp pa0 = runRM pa0 $
   do
-    go x
-    r <- get
-    pa <- lift freeze
+    r <- go False
+    pa <- lftRM lft freeze
     return (r, pa)
 
   where
-    go x =
+    go csmd =
+        lftRM lft sweepR >>= handleEv csmd
+
+    handleEv _ (Event y) =
+        return $ Just y
+
+    handleEv True NoEvent =
+        return Nothing
+
+    handleEv False NoEvent =
       do
-        csmd <- lift $ feedR x
-        modify $ \ri -> ri { hasConsumed = csmd }
+        x <- lift $ aw
+        _ <- lftRM lft $ feedR x
+        go True
 
-        evo <- lift sweepR
-
-        case evo
-          of
-            Event y ->
-              do
-                modify $ \ri -> ri { yields = Just y }
-
-            NoEvent ->
-              do
-                csmd' <- gets hasConsumed
-                if csmd' then return () else go x
-
-            End ->
-                modify $ \ri -> ri { hasStopped = True }
-
--}
+    handleEv _ End =
+        lift stp >> return Nothing
