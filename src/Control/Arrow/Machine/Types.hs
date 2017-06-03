@@ -107,7 +107,7 @@ import Control.Monad.State.Strict
 import Control.Monad.Reader
 import Control.Monad.Writer hiding ((<>))
 import Control.Monad.Identity
-import Control.Monad.Trans.Cont (ContT(..), evalContT, callCC)
+import Control.Monad.Trans.Cont
 import Control.Applicative
 import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
@@ -402,11 +402,11 @@ parProc f g = toProcessT $ ParStep f g
 {-# INLINE [0] parProc #-}
 
 idProc :: Monad m => ProcType m b b
-idProc = makePA (\x -> return (weakly x, idProc)) id
+idProc = let pa = makePA (\x -> return (weakly x, pa)) id in pa
 {-# NOINLINE idProc #-}
 
 arrProc :: Monad m => (b->c) -> ProcType m b c
-arrProc f = makePA (\x -> return (weakly (f x), arrProc f)) f
+arrProc f = let pa = makePA (\x -> return (weakly (f x), pa)) f in pa
 {-# NOINLINE arrProc #-}
 
 -- |Composition is proceeded by the backtracking strategy.
@@ -671,11 +671,9 @@ stopped = arr (const end)
 
 muted ::
     (Monad m, Occasional' b, Occasional c) => ProcessT m b c
-muted = proc x ->
-  do
-    ed <- construct (forever await `catchP` yield ()) -< collapse x
-    rSwitch (arr $ const noEvent) -< ((), stopped <$ ed)
-
+muted = switch (pure noEvent &&& (arr collapse >>> construct go)) $ \_ -> stopped
+  where
+    go = forever await `catchP` yield ()
 
 
 data PlanF i o a where
@@ -725,7 +723,13 @@ yield :: o -> Plan i o ()
 yield x = PlanT . F.liftF $ YieldPF x ()
 
 await :: Plan i o i
-await = PlanT $ F.FT $ \pr free -> free id (AwaitPF pr (free pr StopPF))
+await = PlanT $ F.FT $ \b free ->
+    let
+        aw = free b' $ AwaitPF Just Nothing
+        b' (Just x) = b x
+        b' Nothing = free return StopPF
+      in
+        aw
 
 stop :: Plan i o a
 stop = PlanT $ F.liftF $ StopPF
@@ -736,13 +740,8 @@ catchP:: Monad m =>
 
 catchP (PlanT pl) cont0 =
     PlanT $ F.FT $ \pr free ->
-        F.runFT
-            pl
-            (pr' pr)
-            (free' cont0 pr free)
+        F.runFT pl pr (free' cont0 pr free)
   where
-    pr' pr = pr
-
     free' ::
         Monad m =>
         PlanT i o m a ->
@@ -751,14 +750,14 @@ catchP (PlanT pl) cont0 =
         (y -> m r) ->
         (PlanF i o y) ->
         m r
-    free' (PlanT cont) pr free _ StopPF =
-        F.runFT cont pr free
-    free' (PlanT cont) pr free r (AwaitPF f ff) =
-        free
-            (either (\_ -> F.runFT cont pr free) r)
-            (AwaitPF (Right . f) (Left ff))
-    free' _ _ free r pf =
-        free r pf
+    free' (PlanT cont) pr free r pl' =
+        let contR = F.runFT cont pr free
+            go StopPF = contR
+            go (AwaitPF f ff) =
+                free (either (\_ -> contR) r) $ AwaitPF (Right . f) (Left ff)
+            go _ = free r pl'
+          in
+            go pl'
 
 
 
@@ -775,52 +774,58 @@ constructT' ::
     Monad m =>
     PlanT i o m r ->
     ProcessT m (Event i) (Event o)
-constructT' (PlanT pl0) = prependProc $ F.runFT pl0 pr free
+constructT' (PlanT pl0) = runCont (F.runFT (F.hoistFT m2cont pl0) return free) (const stopProc)
   where
-    prependProc ::
-        m (Event o, ProcessT m (Event i) (Event o)) ->
+    m2cont :: forall r. m r -> Cont (ProcessT m (Event i) (Event o)) r
+    m2cont mr = cont $ \f -> packProc $ liftM f mr
+
+    packProc ::
+        m (ProcessT m (Event i) (Event o)) ->
         ProcessT m (Event i) (Event o)
-    prependProc mr = ProcessT {
-        paFeed = \ex -> do { r <- mr; prependFeed r ex} ,
-        paSweep = \ex -> do { r <- mr; prependSweep r ex},
+    packProc mp = ProcessT {
+        paFeed = \ex -> mp >>= \p -> feed p ex ,
+        paSweep = \ex -> mp >>= \p -> sweep p ex,
         paSuspend = const NoEvent
       }
-
-    prependFeed (Event x, pa) _ = return (Event x, pa)
-    prependFeed (NoEvent, pa) x = feed pa x
-    prependFeed (End, _) _ = return (End, stopped)
-
-    prependSweep (Event x, pa) _ = return (Just (Event x), pa)
-    prependSweep (NoEvent, pa) x = sweep pa x
-    prependSweep (End, _) _ = return (Just End, stopped)
-
-    pr _ = return (End, stopped)
 
     free ::
-        (x -> m (Event o, ProcessT m (Event i) (Event o)))->
+        (x -> Cont (ProcessT m (Event i) (Event o)) r) ->
         PlanF i o x ->
-        m (Event o, ProcessT m (Event i) (Event o))
-    free r (YieldPF y cont) =
-        return (Event y, prependProc (r cont))
-    free r pl@(AwaitPF f ff) =
-        return (NoEvent, awaitProc fma)
+        Cont (ProcessT m (Event i) (Event o)) r
+    free r (YieldPF y rArg) = cont yieldProc >> r rArg
       where
-        fma (Event x) = r (f x)
-        fma NoEvent = free r pl
-        fma End = r ff
-    free _ StopPF =
-        return (End, stopped)
+        yieldProc pa = ProcessT {
+            paFeed = \_ -> return (Event y, pa ()),
+            paSweep = \_ -> return (Just (Event y), pa ()),
+            paSuspend = const NoEvent
+          }
 
-    awaitProc fma = ProcessT {
-        paFeed = fma,
-        paSweep = liftM (first eToM) . fma,
-        paSuspend = const NoEvent
+    free r (AwaitPF f ff) = cont awaitProc >>= r
+      where
+        awaitProc fpa =
+            let
+                awaitProc' = ProcessT {
+                    paFeed = awaitFeed,
+                    paSweep = awaitSweep,
+                    paSuspend = const NoEvent
+                  }
+                awaitFeed (Event x) = feed (fpa $ f x) NoEvent
+                awaitFeed NoEvent = return (NoEvent, awaitProc')
+                awaitFeed End = feed (fpa ff) End
+
+                awaitSweep (Event x) = sweep (fpa $ f x) NoEvent
+                awaitSweep NoEvent = return (Nothing, awaitProc')
+                awaitSweep End = sweep (fpa ff) End
+              in
+                awaitProc'
+
+    free _ StopPF = cont $ const stopProc
+
+    stopProc = ProcessT {
+        paFeed = \_ -> return (End, stopped),
+        paSweep = \_ -> return (Just End, stopped),
+        paSuspend = pure End
       }
-
-    eToM :: Event b -> Maybe (Event b)
-    eToM NoEvent = Nothing
-    eToM e = Just e
-
 
 repeatedlyT :: Monad m =>
               PlanT i o m r ->
