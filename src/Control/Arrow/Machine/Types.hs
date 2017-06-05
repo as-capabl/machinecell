@@ -100,6 +100,7 @@ where
 
 import qualified Control.Category as Cat
 import Data.Profunctor (Profunctor, dimap, rmap)
+import Data.Void
 import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
@@ -113,7 +114,7 @@ import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup, (<>))
 import Data.Maybe (fromMaybe, isNothing, isJust)
-import qualified Control.Monad.Trans.Free as F
+import qualified Control.Monad.Trans.Free as Fr
 import qualified Control.Monad.Trans.Free.Church as F
 import Control.Arrow.Machine.ArrowUtil
 import GHC.Exts (build)
@@ -686,113 +687,106 @@ instance (Functor (PlanF i o)) where
   fmap g (YieldPF x r) = YieldPF x (g r)
   fmap _ StopPF = StopPF
 
+type Evolution i o m = Cont (ProcessT m (Event i) (Event o))
+
 newtype PlanT i o m a =
-    PlanT { freePlanT :: F.FT (PlanF i o) m a }
+    PlanT { freePlanT :: Fr.FreeT (PlanF i o) (Evolution i o m) a }
   deriving
-    (Functor, Applicative, Monad, MonadTrans,
-     Alternative)
+    (Functor, Applicative, Monad)
     -- , MonadError, MonadReader, MonadCatch, MonadThrow, MonadIO, MonadCont
+
 type Plan i o a = forall m. Monad m => PlanT i o m a
 
+packProc ::
+    Monad m =>
+    m (ProcessT m (Event i) (Event o)) ->
+    ProcessT m (Event i) (Event o)
+packProc mp = ProcessT {
+    paFeed = \ex -> mp >>= \p -> feed p ex ,
+    paSweep = \ex -> mp >>= \p -> sweep p ex,
+    paSuspend = const NoEvent
+  }
+
+instance
+    MonadTrans (PlanT i o)
+  where
+    lift mx = PlanT $ lift $ cont $ \fmy -> packProc (liftM fmy mx)
+
+{-
 instance
     MonadReader r m => MonadReader r (PlanT i o m)
   where
-    ask = PlanT ask
-    local f (PlanT pl) = PlanT $ local f pl
+    ask = lift ask
+    local f = lift $ local f
 
 instance
     MonadWriter w m => MonadWriter w (PlanT i o m)
   where
-    tell = PlanT . tell
-    listen = PlanT . listen . freePlanT
-    pass = PlanT . pass . freePlanT
+    tell = lift tell
+    listen = lift listen
+    pass = lift pass
+-}
 
 instance
     MonadState s m => MonadState s (PlanT i o m)
   where
-    get = PlanT get
-    put = PlanT . put
+    get = lift get
+    put x = lift $ put x
 
+{-
 instance
-    (Monad m, Alternative m) => MonadPlus (PlanT i o m)
+    Monad m => MonadPlus (PlanT i o m)
   where
     mzero = stop
     mplus = catchP
+-}
 
 yield :: o -> Plan i o ()
-yield x = PlanT . F.liftF $ YieldPF x ()
+yield x = PlanT $ Fr.liftF $ YieldPF x ()
 
 await :: Plan i o i
-await = PlanT $ F.FT $ \b free ->
-    let
-        aw = free b' $ AwaitPF Just Nothing
-        b' (Just x) = b x
-        b' Nothing = free return StopPF
-      in
-        aw
+await = PlanT $ Fr.wrap $ AwaitPF return (Fr.liftF StopPF)
 
 stop :: Plan i o a
-stop = PlanT $ F.liftF $ StopPF
+stop = PlanT $ Fr.liftF $ StopPF
 
 
 catchP:: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
-
-catchP (PlanT pl) cont0 =
-    PlanT $ F.FT $ \pr free ->
-        F.runFT pl pr (free' cont0 pr free)
+catchP (PlanT pl0) (PlanT plCatch0) = PlanT $ ctM plCatch0 pl0
   where
-    free' ::
-        Monad m =>
-        PlanT i o m a ->
-        (a -> m r) ->
-        (forall x. (x -> m r) -> PlanF i o x -> m r) ->
-        (y -> m r) ->
-        (PlanF i o y) ->
-        m r
-    free' (PlanT cont) pr free r pl' =
-        let contR = F.runFT cont pr free
-            go StopPF = contR
-            go (AwaitPF f ff) =
-                free (either (\_ -> contR) r) $ AwaitPF (Right . f) (Left ff)
-            go _ = free r pl'
-          in
-            go pl'
+    ctM plCatch pl = Fr.FreeT $ Fr.runFreeT pl >>= ctF plCatch
+    ctF plCatch (Fr.Free (AwaitPF f _)) =
+        return $ Fr.Free $ AwaitPF (ctM plCatch  . f) plCatch
+    ctF plCatch (Fr.Free StopPF) = Fr.runFreeT plCatch
+    ctF plCatch (Fr.Free next) = return $ Fr.Free $ ctM plCatch <$> next
+    ctF plCatch (Fr.Pure x) = return $ Fr.Pure x
 
-
-
+stopProc ::
+    Monad m =>
+    ProcessT m (Event i) (Event o)
+stopProc = ProcessT {
+    paFeed = \_ -> return (End, stopped),
+    paSweep = \_ -> return (Just End, stopped),
+    paSuspend = pure End
+  }
 
 constructT ::
     (Monad m) =>
     PlanT i o m r ->
     ProcessT m (Event i) (Event o)
-constructT = constructT'
+constructT pl0 = runCont (realizePlan pl0) (const stopProc)
 
 
-constructT' ::
-    forall m i o r.
+realizePlan ::
     Monad m =>
-    PlanT i o m r ->
-    ProcessT m (Event i) (Event o)
-constructT' (PlanT pl0) = runCont (F.runFT (F.hoistFT m2cont pl0) return free) (const stopProc)
+    PlanT i o m a ->
+    Evolution i o m a
+realizePlan = Fr.iterT free . freePlanT
   where
-    m2cont :: forall r. m r -> Cont (ProcessT m (Event i) (Event o)) r
-    m2cont mr = cont $ \f -> packProc $ liftM f mr
-
-    packProc ::
-        m (ProcessT m (Event i) (Event o)) ->
-        ProcessT m (Event i) (Event o)
-    packProc mp = ProcessT {
-        paFeed = \ex -> mp >>= \p -> feed p ex ,
-        paSweep = \ex -> mp >>= \p -> sweep p ex,
-        paSuspend = const NoEvent
-      }
-
     free ::
-        (x -> Cont (ProcessT m (Event i) (Event o)) r) ->
-        PlanF i o x ->
-        Cont (ProcessT m (Event i) (Event o)) r
-    free r (YieldPF y rArg) = cont yieldProc >> r rArg
+        Monad m => PlanF i o (Evolution i o m a) -> Evolution i o m a
+    free (YieldPF y ret) = cont yieldProc >> ret
       where
         yieldProc pa = ProcessT {
             paFeed = \_ -> return (Event y, pa ()),
@@ -800,7 +794,7 @@ constructT' (PlanT pl0) = runCont (F.runFT (F.hoistFT m2cont pl0) return free) (
             paSuspend = const NoEvent
           }
 
-    free r (AwaitPF f ff) = cont awaitProc >>= r
+    free (AwaitPF f ff) = join (cont awaitProc)
       where
         awaitProc fpa =
             let
@@ -819,31 +813,27 @@ constructT' (PlanT pl0) = runCont (F.runFT (F.hoistFT m2cont pl0) return free) (
               in
                 awaitProc'
 
-    free _ StopPF = cont $ const stopProc
+    free StopPF = cont $ const stopProc
 
-    stopProc = ProcessT {
-        paFeed = \_ -> return (End, stopped),
-        paSweep = \_ -> return (Just End, stopped),
-        paSuspend = pure End
-      }
-
-repeatedlyT :: Monad m =>
-              PlanT i o m r ->
-              ProcessT m (Event i) (Event o)
-
-repeatedlyT = constructT . forever
+repeatedlyT ::
+    Monad m =>
+    PlanT i o m r ->
+    ProcessT m (Event i) (Event o)
+repeatedlyT pl0 = runCont (forever $ realizePlan pl0) absurd
 
 
 -- for pure
-construct :: Monad m =>
-             PlanT i o Identity r ->
-             ProcessT m (Event i) (Event o)
+construct ::
+    Monad m =>
+    PlanT i o Identity r ->
+    ProcessT m (Event i) (Event o)
 construct = fit (return . runIdentity) . constructT
 
-repeatedly :: Monad m =>
-              PlanT i o Identity r ->
-              ProcessT m (Event i) (Event o)
-repeatedly = construct . forever
+repeatedly ::
+    Monad m =>
+    PlanT i o Identity r ->
+    ProcessT m (Event i) (Event o)
+repeatedly = fit (return . runIdentity) . repeatedlyT
 
 
 --
