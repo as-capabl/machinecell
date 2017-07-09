@@ -47,8 +47,8 @@ spec =
             let
                 pa = proc _ ->
                   do
-                    s1 <- P.blockingSource [1, 2, 3] -< ()
-                    s2 <- P.blockingSource [4, 5, 6] -< ()
+                    s1 <- P.blockingSource [1, 2, 3] -< mempty
+                    s2 <- P.blockingSource [4, 5, 6] -< mempty
                     P.gather -< [s1, s2]
             P.run pa (repeat ()) `shouldBe` [4, 5, 6, 1, 2, 3]
 
@@ -68,7 +68,7 @@ spec =
                 equiv = mkEquivTest cond
                     ::(MyTestT (Event Int) (Event Int))
               in
-                (pure () >>> P.blockingSource l)
-                    `equiv` (pure () >>> P.blocking (P.source l))
+                (mempty >>> P.blockingSource l)
+                    `equiv` (mempty >>> P.blocking (P.source l))
 
 

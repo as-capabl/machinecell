@@ -5,6 +5,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE BangPatterns #-}
 
 #if __GLASGOW_HASKELL__ >= 708
 {-# LANGUAGE Safe #-}
@@ -105,10 +106,15 @@ dHold old = proc evx ->
 --     run pa (replicate 10 ())
 -- :}
 -- [1,2,3,4,5,6,7,8,9,10]
+--
+-- Since 4.0.0, this function become strict for the first argument
+-- because lazy one could rarely be used.
+--
+-- You can make `switch`es to make lazy one.
 
 accum ::
     Monad m => b -> ProcessT m (Event (b->b)) b
-accum x = switch (pure x &&& arr (($x)<$>)) accum'
+accum !x = switch (pure x &&& arr (($x)<$>)) accum'
   where
     accum' y = dSwitch (pure y &&& Cat.id) (const (accum y))
 
@@ -122,9 +128,15 @@ accum x = switch (pure x &&& arr (($x)<$>)) accum'
 --     run pa (replicate 10 ())
 -- :}
 -- [0,1,2,3,4,5,6,7,8,9]
+--
+-- Since 4.0.0, this function become strict for the first argument
+-- because lazy one could rarely be used.
+--
+-- You can make `switch`es to make lazy one.
+
 dAccum ::
     Monad m => b -> ProcessT m (Event (b->b)) b
-dAccum x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
+dAccum !x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 
 
 -- |Detects edges of input behaviour.
@@ -227,23 +239,23 @@ edge = proc x ->
 -- @
 source ::
     (Monad m, Fd.Foldable f) =>
-    f c -> ProcessT m (Event b) (Event c)
-source l = construct $ Fd.mapM_ yd l
+    f a -> ProcessT m (Event i) (Event a)
+source l = construct (Fd.mapM_ yd l)
   where
     yd x = await >> yield x
 
 -- | Provides a blocking event stream.
 blockingSource ::
     (Monad m, Fd.Foldable f) =>
-    f c -> ProcessT m () (Event c)
-blockingSource l = pure noEvent >>> construct (Fd.mapM_ yield l)
+    f a -> ProcessT m ZeroEvent (Event a)
+blockingSource l = arr collapse >>> construct (Fd.mapM_ yield l)
 
 -- | Make a blocking source interleaved.
 interleave ::
     Monad m =>
-    ProcessT m () (Event c) ->
-    ProcessT m (Event b) (Event c)
-interleave bs0 = sweep1 (pure () >>> bs0)
+    ProcessT m ZeroEvent (Event a) ->
+    ProcessT m (Event i) (Event a)
+interleave bs0 = sweep1 (mempty >>> bs0)
   where
     waiting bs r =
         dSwitch
@@ -259,7 +271,7 @@ interleave bs0 = sweep1 (pure () >>> bs0)
         ev' <- splitter bs r -< ev
         returnA -< (filterJust (fst <$> ev'), snd <$> ev')
     splitter bs r =
-        construct $
+        (arr collapse >>>) . construct $
           do
             _ <- await
             yield (Just r, bs)
@@ -269,8 +281,8 @@ interleave bs0 = sweep1 (pure () >>> bs0)
 -- | Make an interleaved source blocking.
 blocking ::
     Monad m =>
-    ProcessT m (Event ()) (Event c) ->
-    ProcessT m () (Event c)
+    ProcessT m (Event ()) (Event a) ->
+    ProcessT m ZeroEvent (Event a)
 blocking is = dSwitch (blockingSource (repeat ()) >>> is >>> (Cat.id &&& onEnd)) (const stopped)
 
 

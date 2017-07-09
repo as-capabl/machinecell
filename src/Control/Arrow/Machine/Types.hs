@@ -26,6 +26,9 @@ module
         Occasional' (..),
         Occasional (..),
         Event (),
+        noEvent,
+        end,
+        ZeroEvent(..),
         condEvent,
         filterEvent,
         filterJust,
@@ -368,6 +371,11 @@ instance
     pure = arr . const
     pf <*> px = (pf &&& px) >>> arr (uncurry ($))
 
+instance
+    (Monad m, Monoid o) => Monoid (ProcessT m i o)
+  where
+    mempty = pure mempty
+    mappend = liftA2 mappend
 
 instance
     Monad m => Cat.Category (ProcessT m)
@@ -564,8 +572,7 @@ class
 class
     Occasional' a => Occasional a
   where
-    noEvent :: a
-    end :: a
+    burst :: Event Void -> a
 
 
 instance
@@ -576,8 +583,7 @@ instance
 instance
     (Occasional a, Occasional b) => Occasional (a, b)
   where
-    noEvent = (noEvent, noEvent)
-    end = (end, end)
+    burst = burst &&& burst
 
 instance
     Occasional' (Event a)
@@ -587,8 +593,26 @@ instance
 instance
     Occasional (Event a)
   where
-    noEvent = NoEvent
-    end = End
+    burst = fmap absurd
+
+noEvent :: Occasional a => a
+noEvent = burst NoEvent
+
+end :: Occasional a => a
+end = burst End
+
+data ZeroEvent = ZeroEvent deriving (Eq, Show, Enum, Bounded)
+
+instance
+    Monoid ZeroEvent
+  where
+    mempty = ZeroEvent
+    mappend _ _ = ZeroEvent
+
+instance
+    Occasional' ZeroEvent
+  where
+    collapse _ = mempty
 
 
 condEvent :: Bool -> Event a -> Event a
@@ -672,9 +696,7 @@ stopped = arr (const end)
 
 muted ::
     (Monad m, Occasional' b, Occasional c) => ProcessT m b c
-muted = switch (pure noEvent &&& (arr collapse >>> construct go)) $ \_ -> stopped
-  where
-    go = forever await `catchP` yield ()
+muted = arr collapse >>> repeatedly await >>> arr burst
 
 
 data PlanF i o a where
@@ -690,10 +712,9 @@ instance (Functor (PlanF i o)) where
 type Evolution i o m = Cont (ProcessT m (Event i) (Event o))
 
 newtype PlanT i o m a =
-    PlanT { freePlanT :: Fr.FreeT (PlanF i o) (Evolution i o m) a }
+    PlanT { freePlanT :: F.FT (PlanF i o) m a }
   deriving
-    (Functor, Applicative, Monad)
-    -- , MonadError, MonadReader, MonadCatch, MonadThrow, MonadIO, MonadCont
+    (Functor, Applicative, Monad, Alternative)
 
 type Plan i o a = forall m. Monad m => PlanT i o m a
 
@@ -710,7 +731,7 @@ packProc mp = ProcessT {
 instance
     MonadTrans (PlanT i o)
   where
-    lift mx = PlanT $ lift $ cont $ \fmy -> packProc (liftM fmy mx)
+    lift mx = PlanT $ lift mx
 
 {-
 instance
@@ -740,27 +761,44 @@ instance
     mzero = stop
     mplus = catchP
 -}
+instance
+    MonadIO m => MonadIO (PlanT i o m)
+  where
+    liftIO = lift . liftIO
 
 yield :: o -> Plan i o ()
-yield x = PlanT $ Fr.liftF $ YieldPF x ()
+yield x = PlanT $ F.liftF $ YieldPF x ()
 
 await :: Plan i o i
-await = PlanT $ Fr.wrap $ AwaitPF return (Fr.liftF StopPF)
+await = PlanT $ F.wrap $ AwaitPF return (F.liftF StopPF)
 
 stop :: Plan i o a
-stop = PlanT $ Fr.liftF $ StopPF
+stop = PlanT $ F.liftF $ StopPF
 
 
 catchP:: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
-catchP (PlanT pl0) (PlanT plCatch0) = PlanT $ ctM plCatch0 pl0
+
+catchP (PlanT pl) cont0 =
+    PlanT $ F.FT $ \pr free ->
+        F.runFT pl pr (free' cont0 pr free)
   where
-    ctM plCatch pl = Fr.FreeT $ Fr.runFreeT pl >>= ctF plCatch
-    ctF plCatch (Fr.Free (AwaitPF f _)) =
-        return $ Fr.Free $ AwaitPF (ctM plCatch  . f) plCatch
-    ctF plCatch (Fr.Free StopPF) = Fr.runFreeT plCatch
-    ctF plCatch (Fr.Free next) = return $ Fr.Free $ ctM plCatch <$> next
-    ctF plCatch (Fr.Pure x) = return $ Fr.Pure x
+    free' ::
+        Monad m =>
+        PlanT i o m a ->
+        (a -> m r) ->
+        (forall x. (x -> m r) -> PlanF i o x -> m r) ->
+        (y -> m r) ->
+        (PlanF i o y) ->
+        m r
+    free' (PlanT cont) pr free r pl' =
+        let contR = F.runFT cont pr free
+            go StopPF = contR
+            go (AwaitPF f ff) =
+                free (either (\_ -> contR) r) $ AwaitPF (Right . f) (Left ff)
+            go _ = free r pl'
+          in
+            go pl'
 
 stopProc ::
     Monad m =>
@@ -782,38 +820,39 @@ realizePlan ::
     Monad m =>
     PlanT i o m a ->
     Evolution i o m a
-realizePlan = Fr.iterT free . freePlanT
+realizePlan pl = cont $ \next ->
+    packProc $ F.runFT (freePlanT pl) (return . next) (\b fr -> return $ free (packProc . b <$> fr))
   where
     free ::
-        Monad m => PlanF i o (Evolution i o m a) -> Evolution i o m a
-    free (YieldPF y ret) = cont yieldProc >> ret
+        Monad m => PlanF i o (ProcessT m (Event i) (Event o)) -> ProcessT m (Event i) (Event o)
+    free (YieldPF y pa) = yieldProc
       where
-        yieldProc pa = ProcessT {
-            paFeed = \_ -> return (Event y, pa ()),
-            paSweep = \_ -> return (Just (Event y), pa ()),
+        yieldProc = ProcessT {
+            paFeed = \_ -> return (Event y, pa),
+            paSweep = \_ -> return (Just (Event y), pa),
             paSuspend = const NoEvent
           }
 
-    free (AwaitPF f ff) = join (cont awaitProc)
+    free (AwaitPF f ff) = awaitProc
       where
-        awaitProc fpa =
+        awaitProc =
             let
                 awaitProc' = ProcessT {
                     paFeed = awaitFeed,
                     paSweep = awaitSweep,
                     paSuspend = const NoEvent
                   }
-                awaitFeed (Event x) = feed (fpa $ f x) NoEvent
+                awaitFeed (Event x) = feed (f x) NoEvent
                 awaitFeed NoEvent = return (NoEvent, awaitProc')
-                awaitFeed End = feed (fpa ff) End
+                awaitFeed End = feed ff End
 
-                awaitSweep (Event x) = sweep (fpa $ f x) NoEvent
+                awaitSweep (Event x) = sweep (f x) NoEvent
                 awaitSweep NoEvent = return (Nothing, awaitProc')
-                awaitSweep End = sweep (fpa ff) End
+                awaitSweep End = sweep ff End
               in
                 awaitProc'
 
-    free StopPF = cont $ const stopProc
+    free StopPF = stopProc
 
 repeatedlyT ::
     Monad m =>
