@@ -35,6 +35,7 @@ library
         Control.Arrow.Machine,
         Control.Arrow.Machine.Types,
         Control.Arrow.Machine.Utils,
+        Control.Arrow.Machine.Evolution,
         Control.Arrow.Machine.ArrowUtil,
         Control.Arrow.Machine.Misc.Exception,
         Control.Arrow.Machine.Misc.Pump,

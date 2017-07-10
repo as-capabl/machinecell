@@ -60,6 +60,11 @@ module
         construct,
         repeatedly,
 
+        -- * Evolution monad
+        -- | Time-evolution monad, or generalized plan monad.
+        Evolution(..),
+        packProc,
+
         -- * Running machines (at once)
         runT,
         runT_,
@@ -225,18 +230,18 @@ instance
         case mt
           of
             Just t -> return (Just t, sf0, test')
-            Nothing -> cont sf0 test'
+            Nothing -> next sf0 test'
 
       where
-        cont sf test =
+        next sf test =
           do
             (my, sf') <- sweep sf x
             case my
               of
-                Just y -> cont2 y sf' test
+                Just y -> next2 y sf' test
                 Nothing -> return (Nothing, sf', test)
 
-        cont2 y sf test =
+        next2 y sf test =
           do
             (t, test') <- feed test y
             return (Just t, sf, test')
@@ -698,18 +703,35 @@ muted ::
     (Monad m, Occasional' b, Occasional c) => ProcessT m b c
 muted = arr collapse >>> repeatedly await >>> arr burst
 
+-- | A monad type represents time evolution of ProcessT
+newtype Evolution i o m r = Evolution
+  {
+    runEvolution :: Cont (ProcessT m i o) r
+  }
+  deriving
+    (Functor, Applicative, Monad)
 
-data PlanF i o a where
-  AwaitPF :: (i->a) -> a -> PlanF i o a
-  YieldPF :: o -> a -> PlanF i o a
-  StopPF :: PlanF i o a
+instance
+    Occasional o =>
+    MonadTrans (Evolution i o)
+  where
+    lift ma = Evolution $ cont $ \fmpf -> packProc (fmpf <$> ma)
 
-instance (Functor (PlanF i o)) where
-  fmap g (AwaitPF f ff) = AwaitPF (g . f) (g ff)
-  fmap g (YieldPF x r) = YieldPF x (g r)
-  fmap _ StopPF = StopPF
 
-type Evolution i o m = Cont (ProcessT m (Event i) (Event o))
+data
+    PlanF i o a
+  where
+    AwaitPF :: (i->a) -> a -> PlanF i o a
+    YieldPF :: o -> a -> PlanF i o a
+    StopPF :: PlanF i o a
+
+instance
+    Functor (PlanF i o)
+  where
+    fmap g (AwaitPF f ff) = AwaitPF (g . f) (g ff)
+    fmap g (YieldPF x r) = YieldPF x (g r)
+    fmap _ StopPF = StopPF
+
 
 newtype PlanT i o m a =
     PlanT { freePlanT :: F.FT (PlanF i o) m a }
@@ -719,13 +741,13 @@ newtype PlanT i o m a =
 type Plan i o a = forall m. Monad m => PlanT i o m a
 
 packProc ::
-    Monad m =>
-    m (ProcessT m (Event i) (Event o)) ->
-    ProcessT m (Event i) (Event o)
+    (Monad m, Occasional o) =>
+    m (ProcessT m i o) ->
+    ProcessT m i o
 packProc mp = ProcessT {
     paFeed = \ex -> mp >>= \p -> feed p ex ,
     paSweep = \ex -> mp >>= \p -> sweep p ex,
-    paSuspend = const NoEvent
+    paSuspend = const noEvent
   }
 
 instance
@@ -779,9 +801,9 @@ stop = PlanT $ F.liftF $ StopPF
 catchP:: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
 
-catchP (PlanT pl) cont0 =
+catchP (PlanT pl) next0 =
     PlanT $ F.FT $ \pr free ->
-        F.runFT pl pr (free' cont0 pr free)
+        F.runFT pl pr (free' next0 pr free)
   where
     free' ::
         Monad m =>
@@ -791,11 +813,11 @@ catchP (PlanT pl) cont0 =
         (y -> m r) ->
         (PlanF i o y) ->
         m r
-    free' (PlanT cont) pr free r pl' =
-        let contR = F.runFT cont pr free
-            go StopPF = contR
+    free' (PlanT next) pr free r pl' =
+        let nextR = F.runFT next pr free
+            go StopPF = nextR
             go (AwaitPF f ff) =
-                free (either (\_ -> contR) r) $ AwaitPF (Right . f) (Left ff)
+                free (either (\_ -> nextR) r) $ AwaitPF (Right . f) (Left ff)
             go _ = free r pl'
           in
             go pl'
@@ -813,14 +835,14 @@ constructT ::
     (Monad m) =>
     PlanT i o m r ->
     ProcessT m (Event i) (Event o)
-constructT pl0 = runCont (realizePlan pl0) (const stopProc)
+constructT pl0 = runCont (runEvolution $ realizePlan pl0) (const stopProc)
 
 
 realizePlan ::
     Monad m =>
     PlanT i o m a ->
-    Evolution i o m a
-realizePlan pl = cont $ \next ->
+    Evolution (Event i) (Event o) m a
+realizePlan pl = Evolution $ cont $ \next ->
     packProc $ F.runFT (freePlanT pl) (return . next) (\b fr -> return $ free (packProc . b <$> fr))
   where
     free ::
@@ -858,7 +880,7 @@ repeatedlyT ::
     Monad m =>
     PlanT i o m r ->
     ProcessT m (Event i) (Event o)
-repeatedlyT pl0 = runCont (forever $ realizePlan pl0) absurd
+repeatedlyT pl0 = runCont (forever $ runEvolution $ realizePlan pl0) absurd
 
 
 -- for pure

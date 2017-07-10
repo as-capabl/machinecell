@@ -29,12 +29,14 @@ module
         -- They are all designed to import qualified.
         module Control.Arrow.Machine.ArrowUtil,
         module Control.Arrow.Machine.Types,
+        module Control.Arrow.Machine.Evolution,
         module Control.Arrow.Machine.Utils
        )
 where
 
 import Control.Arrow.Machine.ArrowUtil
 import Control.Arrow.Machine.Types
+import Control.Arrow.Machine.Evolution
 import Control.Arrow.Machine.Utils
 
 -- $setup
