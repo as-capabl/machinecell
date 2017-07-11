@@ -8,6 +8,8 @@ module
         dSwitchAfter,
         kSwitchAfter,
         dkSwitchAfter,
+        gSwitchAfter,
+        dgSwitchAfter,
         finishWith,
         evolve
       )
@@ -33,17 +35,33 @@ dSwitchAfter pf = Evolution $ cont $ dSwitch pf
 
 kSwitchAfter ::
     Monad m =>
-    ProcessT m i o ->
     ProcessT m (i, o) (Event r) ->
+    ProcessT m i o ->
     Evolution i o m (ProcessT m i o, r)
-kSwitchAfter pf test = Evolution $ cont $ kSwitch pf test . curry
+kSwitchAfter test pf = Evolution $ cont $ kSwitch pf test . curry
 
 dkSwitchAfter ::
     Monad m =>
-    ProcessT m i o ->
     ProcessT m (i, o) (Event r) ->
+    ProcessT m i o ->
     Evolution i o m (ProcessT m i o, r)
-dkSwitchAfter pf test = Evolution $ cont $ dkSwitch pf test . curry
+dkSwitchAfter test pf = Evolution $ cont $ dkSwitch pf test . curry
+
+gSwitchAfter ::
+    Monad m =>
+    ProcessT m i (p, r) ->
+    ProcessT m (q, r) (o, Event t) ->
+    ProcessT m p q ->
+    Evolution i o m (ProcessT m p q, t)
+gSwitchAfter pre post pf = Evolution $ cont $ gSwitch pre pf post . curry
+
+dgSwitchAfter ::
+    Monad m =>
+    ProcessT m i (p, r) ->
+    ProcessT m (q, r) (o, Event t) ->
+    ProcessT m p q ->
+    Evolution i o m (ProcessT m p q, t)
+dgSwitchAfter pre post pf = Evolution $ cont $ dgSwitch pre pf post . curry
 
 finishWith ::
     Monad m =>
