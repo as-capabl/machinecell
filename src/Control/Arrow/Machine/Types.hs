@@ -64,6 +64,8 @@ module
         -- | Time-evolution monad, or generalized plan monad.
         Evolution(..),
         packProc,
+        awaitProc,
+        yieldProc,
 
         -- * Running machines (at once)
         runT,
@@ -694,10 +696,6 @@ evMap ::  Arrow a => (b->c) -> a (Event b) (Event c)
 evMap = arr . fmap
 
 
-stopped ::
-    (Monad m, Occasional c) => ProcessT m b c
-stopped = arr (const end)
-
 
 muted ::
     (Monad m, Occasional' b, Occasional c) => ProcessT m b c
@@ -788,15 +786,52 @@ instance
   where
     liftIO = lift . liftIO
 
-yield :: o -> Plan i o ()
-yield x = PlanT $ F.liftF $ YieldPF x ()
+class
+    MonadAwait m a | m -> a
+  where
+    await :: m a
 
-await :: Plan i o i
-await = PlanT $ F.wrap $ AwaitPF return (F.liftF StopPF)
+instance
+    Monad m => MonadAwait (PlanT i o m) i
+  where
+    await = PlanT $ F.wrap $ AwaitPF return (F.liftF StopPF)
 
-stop :: Plan i o a
-stop = PlanT $ F.liftF $ StopPF
+instance
+    (Monad m, Occasional o) =>
+    MonadAwait (Evolution (Event a) o m) a
+  where
+    await = Evolution $ cont $ \next -> awaitProc next stopped
 
+class
+    MonadYield m a | m -> a
+  where
+    yield :: a -> m ()
+
+instance
+    Monad m => MonadYield (PlanT i o m) o
+  where
+    yield x = PlanT $ F.liftF $ YieldPF x ()
+
+instance
+    Monad m => MonadYield (Evolution i (Event a) m) a
+  where
+    yield x = Evolution $ cont $ \next -> yieldProc x (next ())
+
+class
+    MonadStop m
+  where
+    stop :: m a
+
+instance
+    Monad m => MonadStop (PlanT i o m)
+  where
+    stop = PlanT $ F.liftF StopPF
+
+instance
+    (Monad m, Occasional o) =>
+    MonadStop (Evolution i o m)
+  where
+    stop = Evolution $ cont $ const stopped
 
 catchP:: Monad m =>
     PlanT i o m a -> PlanT i o m a -> PlanT i o m a
@@ -822,20 +857,52 @@ catchP (PlanT pl) next0 =
           in
             go pl'
 
-stopProc ::
+awaitProc ::
+    (Monad m, Occasional o) =>
+    (a -> ProcessT m (Event a) o) ->
+    ProcessT m (Event a) o ->
+    ProcessT m (Event a) o
+awaitProc f ff = awaitProc'
+  where
+    awaitProc' = ProcessT {
+        paFeed = awaitFeed,
+        paSweep = awaitSweep,
+        paSuspend = const noEvent
+      }
+
+    awaitFeed (Event x) = feed (f x) NoEvent
+    awaitFeed NoEvent = return (noEvent, awaitProc')
+    awaitFeed End = feed ff End
+
+    awaitSweep (Event x) = sweep (f x) NoEvent
+    awaitSweep NoEvent = return (Nothing, awaitProc')
+    awaitSweep End = sweep ff End
+
+yieldProc ::
     Monad m =>
-    ProcessT m (Event i) (Event o)
-stopProc = ProcessT {
-    paFeed = \_ -> return (End, stopped),
-    paSweep = \_ -> return (Just End, stopped),
-    paSuspend = pure End
+    a ->
+    ProcessT m i (Event a) ->
+    ProcessT m i (Event a)
+yieldProc y pa = ProcessT {
+    paFeed = \_ -> return (Event y, pa),
+    paSweep = \_ -> return (Just (Event y), pa),
+    paSuspend = const NoEvent
+  }
+
+stopped ::
+    (Monad m, Occasional o) =>
+    ProcessT m i o
+stopped = ProcessT {
+    paFeed = \_ -> return (end, arr (const end)),
+    paSweep = \_ -> return (Just end, arr (const end)),
+    paSuspend = pure end
   }
 
 constructT ::
     (Monad m) =>
     PlanT i o m r ->
     ProcessT m (Event i) (Event o)
-constructT pl0 = runCont (runEvolution $ realizePlan pl0) (const stopProc)
+constructT pl0 = runCont (runEvolution $ realizePlan pl0) (const stopped)
 
 
 realizePlan ::
@@ -847,34 +914,9 @@ realizePlan pl = Evolution $ cont $ \next ->
   where
     free ::
         Monad m => PlanF i o (ProcessT m (Event i) (Event o)) -> ProcessT m (Event i) (Event o)
-    free (YieldPF y pa) = yieldProc
-      where
-        yieldProc = ProcessT {
-            paFeed = \_ -> return (Event y, pa),
-            paSweep = \_ -> return (Just (Event y), pa),
-            paSuspend = const NoEvent
-          }
-
-    free (AwaitPF f ff) = awaitProc
-      where
-        awaitProc =
-            let
-                awaitProc' = ProcessT {
-                    paFeed = awaitFeed,
-                    paSweep = awaitSweep,
-                    paSuspend = const NoEvent
-                  }
-                awaitFeed (Event x) = feed (f x) NoEvent
-                awaitFeed NoEvent = return (NoEvent, awaitProc')
-                awaitFeed End = feed ff End
-
-                awaitSweep (Event x) = sweep (f x) NoEvent
-                awaitSweep NoEvent = return (Nothing, awaitProc')
-                awaitSweep End = sweep ff End
-              in
-                awaitProc'
-
-    free StopPF = stopProc
+    free (AwaitPF f ff) = awaitProc f ff
+    free (YieldPF y pa) = yieldProc y pa
+    free StopPF = stopped
 
 repeatedlyT ::
     Monad m =>
