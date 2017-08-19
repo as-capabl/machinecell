@@ -713,7 +713,15 @@ instance
     Occasional o =>
     MonadTrans (Evolution i o)
   where
+    {-# INLINE lift #-}
     lift ma = Evolution $ cont $ \fmpf -> packProc (fmpf <$> ma)
+
+instance
+    (MonadIO m, Occasional o) =>
+    MonadIO (Evolution i o m)
+  where
+    {-# INLINE liftIO #-}
+    liftIO ma = lift $ liftIO ma
 
 
 data
@@ -742,16 +750,24 @@ packProc ::
     (Monad m, Occasional o) =>
     m (ProcessT m i o) ->
     ProcessT m i o
-packProc mp = ProcessT {
+packProc !mp = ProcessT {
     paFeed = \ex -> mp >>= \p -> feed p ex ,
     paSweep = \ex -> mp >>= \p -> sweep p ex,
     paSuspend = const noEvent
   }
+{-# INLINE[0] packProc #-}
+{-# RULES
+"ProcessT: packProc/return"
+    forall p. packProc (return p) = p
+"ProcessT: return/packProc"
+    forall p. return (packProc p) = p
+ #-}
 
 instance
     MonadTrans (PlanT i o)
   where
     lift mx = PlanT $ lift mx
+    {-# INLINE lift #-}
 
 {-
 instance
@@ -781,10 +797,12 @@ instance
     mzero = stop
     mplus = catchP
 -}
+
 instance
     MonadIO m => MonadIO (PlanT i o m)
   where
     liftIO = lift . liftIO
+    {-# INLINE liftIO #-}
 
 class
     MonadAwait m a | m -> a
@@ -794,12 +812,14 @@ class
 instance
     Monad m => MonadAwait (PlanT i o m) i
   where
+    {-# INLINE await #-}
     await = PlanT $ F.wrap $ AwaitPF return (F.liftF StopPF)
 
 instance
     (Monad m, Occasional o) =>
     MonadAwait (Evolution (Event a) o m) a
   where
+    {-# INLINE await #-}
     await = Evolution $ cont $ \next -> awaitProc next stopped
 
 class
@@ -810,11 +830,13 @@ class
 instance
     Monad m => MonadYield (PlanT i o m) o
   where
+    {-# INLINE yield #-}
     yield x = PlanT $ F.liftF $ YieldPF x ()
 
 instance
     Monad m => MonadYield (Evolution i (Event a) m) a
   where
+    {-# INLINE yield #-}
     yield x = Evolution $ cont $ \next -> yieldProc x (next ())
 
 class
@@ -825,12 +847,14 @@ class
 instance
     Monad m => MonadStop (PlanT i o m)
   where
+    {-# INLINE stop #-}
     stop = PlanT $ F.liftF StopPF
 
 instance
     (Monad m, Occasional o) =>
     MonadStop (Evolution i o m)
   where
+    {-# INLINE stop #-}
     stop = Evolution $ cont $ const stopped
 
 catchP:: Monad m =>
@@ -857,6 +881,7 @@ catchP (PlanT pl) next0 =
           in
             go pl'
 
+{-# INLINE awaitProc #-}
 awaitProc ::
     (Monad m, Occasional o) =>
     (a -> ProcessT m (Event a) o) ->
@@ -878,6 +903,7 @@ awaitProc f ff = awaitProc'
     awaitSweep NoEvent = return (Nothing, awaitProc')
     awaitSweep End = sweep ff End
 
+{-# INLINE yieldProc #-}
 yieldProc ::
     Monad m =>
     a ->
@@ -889,6 +915,7 @@ yieldProc y pa = ProcessT {
     paSuspend = const NoEvent
   }
 
+{-# INLINE stopped #-}
 stopped ::
     (Monad m, Occasional o) =>
     ProcessT m i o
@@ -898,13 +925,14 @@ stopped = ProcessT {
     paSuspend = pure end
   }
 
+{-# INLINE constructT #-}
 constructT ::
     (Monad m) =>
     PlanT i o m r ->
     ProcessT m (Event i) (Event o)
 constructT pl0 = runCont (runEvolution $ realizePlan pl0) (const stopped)
 
-
+{-# INLINE realizePlan #-}
 realizePlan ::
     Monad m =>
     PlanT i o m a ->
@@ -918,6 +946,7 @@ realizePlan pl = Evolution $ cont $ \next ->
     free (YieldPF y pa) = yieldProc y pa
     free StopPF = stopped
 
+{-# INLINE repeatedlyT #-}
 repeatedlyT ::
     Monad m =>
     PlanT i o m r ->
@@ -926,12 +955,14 @@ repeatedlyT pl0 = runCont (forever $ runEvolution $ realizePlan pl0) absurd
 
 
 -- for pure
+{-# INLINE construct #-}
 construct ::
     Monad m =>
     PlanT i o Identity r ->
     ProcessT m (Event i) (Event o)
 construct = fit (return . runIdentity) . constructT
 
+{-# INLINE repeatedly #-}
 repeatedly ::
     Monad m =>
     PlanT i o Identity r ->
