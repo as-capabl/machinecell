@@ -52,6 +52,7 @@ module
         fork,
         fire,
         fire0,
+        anytime,
         par,
         parB,
         oneshot,
@@ -371,6 +372,13 @@ fire0 ::
     m c ->
     ProcessT m (Event ()) (Event c)
 fire0 = fire  . const
+
+-- |Executes an action once per an input event is provided.
+anytime ::
+    ArrowApply a =>
+    a b c ->
+    ProcessA a (Event b) (Event c)
+anytime f = fire (\x -> ArrowMonad (arr (const x) >>> f))
 
 -- |Emit an event of given value as soon as possible.
 oneshot ::

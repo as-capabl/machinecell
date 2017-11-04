@@ -45,9 +45,9 @@ module
         PlanT(..),
         Plan,
 
-        await,
-        yield,
-        stop,
+        MonadAwait (..),
+        MonadYield (..),
+        MonadStop (..),
         catchP,
 
         stopped,
@@ -71,13 +71,14 @@ module
         runT,
         runT_,
         run,
+        run_,
 
         -- * Running machines (step-by-step)
         stepRun,
         stepYield,
 
         -- * Primitive machines - switches
-        -- | Switches inspired by Yampa library.
+        -- | Switches inspired by the Yampa library.
         -- Signature is almost same, but collection requirement is  not only 'Functor',
         -- but 'Tv.Traversable'. This is because of side effects.
         switch,
@@ -169,9 +170,6 @@ data ProcessT m b c = ProcessT {
   }
 
 -- | Isomorphic to ProcessT when 'a' is ArrowApply.
---
--- If you don't need side effects, use 'ProcessA (->)' instead of 'ProcessT Identity'.
--- It is convenient when you use `run` function.
 type ProcessA a = ProcessT (ArrowMonad a)
 
 instance
@@ -742,7 +740,7 @@ instance
 newtype PlanT i o m a =
     PlanT { freePlanT :: F.FT (PlanF i o) m a }
   deriving
-    (Functor, Applicative, Monad, Alternative)
+    (Functor, Applicative, Monad)
 
 type Plan i o a = forall m. Monad m => PlanT i o m a
 
@@ -757,11 +755,13 @@ packProc !mp = ProcessT {
   }
 {-# INLINE[0] packProc #-}
 {-# RULES
-"ProcessT: packProc/return"
-    forall p. packProc (return p) = p
 "ProcessT: return/packProc"
     forall p. return (packProc p) = p
  #-}
+{-
+"ProcessT: packProc/return"
+    forall p. packProc (return p) = p
+ -}
 
 instance
     MonadTrans (PlanT i o)
@@ -769,20 +769,18 @@ instance
     lift mx = PlanT $ lift mx
     {-# INLINE lift #-}
 
-{-
 instance
     MonadReader r m => MonadReader r (PlanT i o m)
   where
     ask = lift ask
-    local f = lift $ local f
+    local f mx = PlanT $ local f (freePlanT mx)
 
 instance
     MonadWriter w m => MonadWriter w (PlanT i o m)
   where
-    tell = lift tell
-    listen = lift listen
-    pass = lift pass
--}
+    tell = lift . tell
+    listen mx = PlanT $ listen (freePlanT mx)
+    pass mx = PlanT $ pass (freePlanT mx)
 
 instance
     MonadState s m => MonadState s (PlanT i o m)
@@ -790,13 +788,17 @@ instance
     get = lift get
     put x = lift $ put x
 
-{-
+instance
+    Monad m => Alternative (PlanT i o m)
+  where
+    empty = stop
+    (<|>) = catchP
+
 instance
     Monad m => MonadPlus (PlanT i o m)
   where
     mzero = stop
     mplus = catchP
--}
 
 instance
     MonadIO m => MonadIO (PlanT i o m)
@@ -1494,7 +1496,7 @@ breakCont :: Monad m => r -> ContT r m a
 breakCont = ContT . const . return
 
 
--- | Run a machine with results concatenated in terms of a monoid.
+-- | Run a machine.
 runT ::
     (Monad m, Fd.Foldable f) =>
     (c -> m ()) ->
@@ -1547,6 +1549,11 @@ run ::
     f a -> [b]
 run pa = bToList . runT putB (fit lift pa)
 
+run_ ::
+    (Foldable f, ArrowApply a) =>
+    ProcessA a (Event b) (Event c) ->
+    a (f b) ()
+run_ pa = proc l -> case runT_ pa l of {ArrowMonad f -> f} -<< ()
 
 lftRM :: (Monad m, Monad m') =>
     (forall p. m p -> m' p) ->
@@ -1556,13 +1563,25 @@ lftRM lft' st = StateT $ \s -> lft' $ runStateT st s
 
 
 -- | Execute until an input consumed and the machine suspends.
+--
+-- During the execution, the machine may yield values or stops.
+-- It can be handled by two callbacks.
+--
+-- In some case the machine failed to consume the input value.
+-- If so, the value is passed to the termination callback.
 stepRun ::
     (Monad m, Monad m') =>
-    (forall p. m p -> m' p) ->
-    (b -> m' ()) ->
-    (Maybe a -> m' ()) ->
-    ProcessT m (Event a) (Event b) ->
-    a -> m' (ProcessT m (Event a) (Event b))
+    (forall p. m p -> m' p) -- ^ Lifting function (pass `id` if m' ~ m)
+      ->
+    (b -> m' ()) -- ^ Callback on every output value.
+      ->
+    (Maybe a -> m' ()) -- ^ Callback on termination.
+      ->
+    ProcessT m (Event a) (Event b)  -- ^ The machine to run.
+      ->
+    a -- ^ The argument to the machine.
+      ->
+    m' (ProcessT m (Event a) (Event b))
 stepRun lft yd stp pa0 x =
   do
     pa <- runRM pa0 $
@@ -1586,16 +1605,25 @@ stepRun lft yd stp pa0 x =
         pa <- lftRM lft freeze
         return pa
     return pa
-  where
 
 
 -- | Execute until an output produced.
+--
+-- During the execution, the machine may await values or stops.
+-- It can be handled by two callbacks.
+--
+-- If the machine stops without producing any value,
+-- The first element of the return tuple is `Nothing`.
 stepYield ::
     (Monad m, Monad m') =>
-    (forall p. m p -> m' p) ->
-    m' a ->
-    m' () ->
-    ProcessT m (Event a) (Event b) ->
+    (forall p. m p -> m' p)  -- ^ Lifting function (pass `id` if m' ~ m)
+      ->
+    m' a -- ^ Callback on input value request.
+      ->
+    m' () -- ^ Callback on termination
+      ->
+    ProcessT m (Event a) (Event b) -- ^ The machine to run.
+      ->
     m' (Maybe b, ProcessT m (Event a) (Event b))
 stepYield lft aw stp pa0 = runRM pa0 $
   do
