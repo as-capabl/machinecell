@@ -52,18 +52,18 @@ import Control.Arrow.Machine.Utils
 -- >>> run (evMap (+1)) [1, 2, 3]
 -- [2,3,4]
 --
--- In above statement, "`evMap` (+1)" has a type "ProcessA (-\>) (Event Int) (Event Int)",
+-- In above statement, "`evMap` (+1)" has a type __ProcessT Identity (Event Int) (Event Int)__ ,
 -- which denotes "A stream transducer that takes a series of Int as input,
--- gives a series of Int as output, run on base arrow (-\>)."
+-- gives a series of Int as output, run on base monad `Identity` ."
 --
--- `ProcessA` is the transducer type of machinecell library.
+-- `ProcessT` is the transducer type of machinecell library.
 --
 -- = Side effects
 --
--- In general, `Arrow` types other than (-\>) may have side effects.
--- For example any monadic side effects can be performed by wrapping the monad with `Kleisli`.
+-- The first type argurment of `ProcessT` is the underlying monad.
+-- Transtucers can have side effects of the type.
 --
--- ProcessA can run the effects as following.
+-- ProcessT can run the effects as following.
 --
 -- >>> runT_ (fire print) [1, 2, 3]
 -- 1
@@ -75,9 +75,9 @@ import Control.Arrow.Machine.Utils
 --
 -- That is useful in the case rather side effects are main concern.
 --
--- = ProcessA as pipes
+-- = ProcessT as pipes
 --
--- "ProcessA a (Event b) (Event c)" transducers are actually one-directional composable pipes.
+-- "ProcessT a (Event b) (Event c)" transducers are actually one-directional composable pipes.
 --
 -- They can be constructed from the `Plan` monad.
 -- In `Plan` monad context, `await` and `yield` can be used to get and emit values.
@@ -86,7 +86,10 @@ import Control.Arrow.Machine.Utils
 -- Then, resulting processes are composed as `Category` using `(\>\>\>)` operator.
 --
 -- >>> :{
--- let mySource = source [1..]
+-- let mySource = repeatedly $
+--       do
+--         _ <- await
+--         yield 1
 --     myPipe = construct $
 --       do
 --         s1 <- await
@@ -99,7 +102,7 @@ import Control.Arrow.Machine.Utils
 --   in
 --     runT_ (mySource >>> myPipe >>> mySink) (repeat ())
 -- :}
--- 3
+-- 2
 --
 -- Unlike other pipe libraries, even the source calls `await`.
 -- The source awaits dummy input, namely "(repeat ())", and discard input values.
@@ -134,7 +137,7 @@ import Control.Arrow.Machine.Utils
 --
 -- One of the most attractive feature of machinecell is the /arrow composition/.
 --
--- In addition to `Category`, ProcessA has `Arrow` instance declaration,
+-- In addition to `Category`, ProcessT has `Arrow` instance declaration,
 -- which allows parallel compositions.
 --
 -- If a type has an `Arrow` instance, it can be wrote by ghc extended proc-do notation as following.
@@ -169,8 +172,8 @@ import Control.Arrow.Machine.Utils
 -- But several built-in transducers provide non-event values like below.
 --
 -- @
--- hold :: ArrowApply a =\> b -\> ProcessA a (Event b) b
--- accum :: ArrowApply a =\> b -\> ProcessA a (Event (b-\>b)) b
+-- hold :: ArrowApply a =\> b -\> ProcessT a (Event b) b
+-- accum :: ArrowApply a =\> b -\> ProcessT a (Event (b-\>b)) b
 -- @
 --
 -- `hold` keeps the last input until a new value is provided.
@@ -211,9 +214,9 @@ import Control.Arrow.Machine.Utils
 
 
 -- $note
--- = Purity of `ProcessA (-\>)`
--- Since the 1st type parameter of `ProcessA` represents base monad(ArrowApply),
--- "ProcessA (-\>)" is expected to be pure.
+-- = Purity of `ProcessT (-\>)`
+-- Since the 1st type parameter of `ProcessT` represents base monad(ArrowApply),
+-- "ProcessT (-\>)" is expected to be pure.
 --
 -- In other words, the following arrow results the same result for arbitrary f.
 --
@@ -250,7 +253,7 @@ import Control.Arrow.Machine.Utils
 --
 -- = Looping
 --
--- Although `ProcessA` is an instance of `ArrowLoop`,
+-- Although `ProcessT` is an instance of `ArrowLoop`,
 -- there is a large limitation.
 --
 -- The limitation is, Events mustn't be looped back to upstream.
