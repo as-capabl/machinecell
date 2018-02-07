@@ -64,7 +64,7 @@ Test-suite spec
                        Types.StepExecutionSpec,
                        Utils.SourceSpec,
                        Misc.PumpSpec
-  Build-depends:       base >=4.0 && <5.0, mtl >=2.2, profunctors >=4.0.4, QuickCheck >=1.0, hspec >=0.2.0, semigroups >=0.8.3.1, machinecell >=1.0.0
+  Build-depends:       base >=4.0 && <5.0, mtl >=2.2, profunctors >=4.0.4, QuickCheck >=1.0, hspec >=0.2.0, semigroups >=0.8.3.1, machinecell >=4.0.0
 
 Test-suite doctest
   type:                exitcode-stdio-1.0

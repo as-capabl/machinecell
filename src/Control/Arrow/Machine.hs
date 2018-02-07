@@ -52,9 +52,9 @@ import Control.Arrow.Machine.Utils
 -- >>> run (evMap (+1)) [1, 2, 3]
 -- [2,3,4]
 --
--- In above statement, "`evMap` (+1)" has a type __ProcessT Identity (Event Int) (Event Int)__ ,
+-- In above statement, "`evMap` (+1)" has a type __"ProcessT Identity (Event Int) (Event Int)"__ ,
 -- which denotes "A stream transducer that takes a series of Int as input,
--- gives a series of Int as output, run on base monad `Identity` ."
+-- gives a series of Int as output, run on base monad `Identity`."
 --
 -- `ProcessT` is the transducer type of machinecell library.
 --

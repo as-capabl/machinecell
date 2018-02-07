@@ -98,6 +98,7 @@ dHold old = proc evx ->
     drSwitch (pure old) -< ((), pure <$> evx)
 
 -- | Accumulate inputs like fold.
+--
 -- >>> :{
 -- let pa = proc evx ->
 --       do
@@ -120,6 +121,7 @@ accum !x = switch (pure x &&& arr (($x)<$>)) accum'
     accum' y = dSwitch (pure y &&& Cat.id) (const (accum y))
 
 -- | Delayed version of `accum`.
+--
 -- >>> :{
 -- let pa = proc evx ->
 --       do

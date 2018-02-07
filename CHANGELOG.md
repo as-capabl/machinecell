@@ -1,4 +1,29 @@
 
+4.0.0
+----------
+### Breaking changes of APIs
+* Side-effects are represented by `Monad`s rather than `ArrowApply`ies.
+    * Replace the base arrow `ProcessA` with `ProcessT`
+    * `ProcessA` is now type alias for compatibility
+    * Change the signatures of construction functions
+        * `constructT`, `repeatedlyT`
+        * `construct`, `repeatedly`
+    * Change the signatures of running functions
+        * `runT`, `runT_`, `run`, `run_`
+        * `stepRun`, `stepYield`
+            * Delete `ExecInfo`.
+* Change the `Occasional'` type class
+    * Add method `burst`
+    * Move `noEvent` `end` out of the type class
+* Delete `echo`. Use `id` instead.
+
+### Additions
+* Add `ZeroEvent`. Change the signatures of blocking sources with it.
+* Add `Evolution`
+* Add type classes `MonadAwait`, `MonadYield`, `MonadStop`
+    * Generalize `await`, `yield`, and `stop` to `Evolution`
+* Add `fire`, `fire0`
+
 3.3.2
 ----------
 * Modify again the versions of depending packages.
