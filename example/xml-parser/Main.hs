@@ -2,7 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE BangPatterns #-}
-    
+
 import Prelude hiding ((.), id)
 import Control.Category
 import Control.Arrow
@@ -21,7 +21,6 @@ import Control.Monad.Trans.Resource
 import Control.Monad.IO.Class
 
 import Control.Arrow.Machine.Types
-import Control.Arrow.Machine.ArrowUtil
 import qualified Control.Arrow.Machine.Utils as Mc
 import ConduitAdaptor
 
@@ -29,20 +28,10 @@ import ConduitAdaptor
 --
 -- Local definitions
 --
-type MainMonad = ResourceT IO
-type MainArrow = Kleisli MainMonad
-
-liftConduit ::
-    Cd.ConduitM i o MainMonad r -> ProcessA MainArrow (Event i) (Event o)
-liftConduit = constructAuto (^.uc0.kl)
-
-io :: MonadIO m => Getter (a -> IO b) (a -> m b)
-io = to (liftIO .)
-
 makePrisms ''XML.Event
 forkOf ::
-    ArrowApply a =>
-    Fold s b -> ProcessA a (Event s) (Event b)
+    Monad m =>
+    Fold s b -> ProcessT m (Event s) (Event b)
 forkOf fd = repeatedly $ await >>= mapMOf_ fd yield
 
 --
@@ -51,22 +40,22 @@ forkOf fd = repeatedly $ await >>= mapMOf_ fd yield
 mainArrow file = proc start ->
   do
     -- File read
-    source <- liftConduit $ CE.sourceFile file -< start
+    source <- constructAuto $ CE.sourceFile file -< start
 
     -- XML Parse
-    parseEvents <- liftConduit $ XML.parseBytes XML.def -< source
+    parseEvents <- constructAuto $ XML.parseBytes XML.def -< source
 
     -- Remember depth
     beginElem <- forkOf _EventBeginElement -< parseEvents
     endElem <- forkOf _EventEndElement -< parseEvents
     depth <- Mc.dAccum (0::Int) <<< Mc.gather -< [(+1) <$ beginElem, (\x->x-1) <$ endElem]
-    
+
     -- output tag name at the depth
     let tagName = XML.nameLocalName . fst <$> beginElem
-    Mc.anytime $ Txt.putStrLn ^.io.kl -<
+    Mc.fire $ liftIO . Txt.putStrLn -<
         (Txt.pack (join $ replicate depth "  ") `mappend`) <$> tagName
 
 main =
   do
     args <- getArgs
-    runResourceT $ kl # run (mainArrow $ head args) $ []
+    runResourceT $ runT_ (mainArrow $ head args) []

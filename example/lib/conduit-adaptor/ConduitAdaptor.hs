@@ -19,7 +19,7 @@ import Automaton
 
 instance
     Monad m =>
-    Automaton (Conduit.ConduitM i o m r) m i o
+    Automaton m i o (Conduit.ConduitM i o m r)
   where
     auto cd =
         let
@@ -30,10 +30,10 @@ instance
 
 instance
     Monad m =>
-    Automaton (Conduit.ResumableSource m o) m () o
+    Automaton m () o (Conduit.ResumableSource m o)
   where
     auto rs =
-        hoist lift rs $$+- sinkPlan 
+        hoist lift rs $$+- sinkPlan
 
 --
 -- private

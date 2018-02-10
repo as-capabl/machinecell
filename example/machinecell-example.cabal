@@ -14,20 +14,20 @@ cabal-version:       >=1.10
 
 executable counter
   main-is:            Main.hs
-  -- other-modules:
   other-extensions:    Arrows
   build-depends:       base >=4.6 && <5.0, arrows, mtl, machinecell >= 3.0.0
   hs-source-dirs:      counter
   default-language:    Haskell2010
 
-executable reader
-  main-is:             reader.hs
-  -- other-modules:
-  other-extensions:    Arrows, RankNTypes, FlexibleInstances, RecursiveDo, TypeSynonymInstances, RecordWildCards, MultiWayIf, TemplateHaskell
-  build-depends:       base >=4.6 && <5.0, arrows, mtl, random >=1.1 && <1.2, machinecell >= 3.0.0, lens
-  hs-source-dirs:      reader
-  default-language:    Haskell2010
+-- Compiles if arrow-tr flag is enabled. --------------------------
+-- executable reader
+--   main-is:             reader.hs
+--   other-extensions:    Arrows, RankNTypes, FlexibleInstances, RecursiveDo, TypeSynonymInstances, RecordWildCards, MultiWayIf, TemplateHaskell
+--   build-depends:       base >=4.6 && <5.0, arrows, mtl, random >=1.1 && <1.2, machinecell >= 3.0.0, lens
+--   hs-source-dirs:      reader
+--   default-language:    Haskell2010
 
+-- Planning to move to another package. --------------------------
 -- executable wx-hello
 --   main-is:		Main.hs
 --   build-depends:       base >=4.6 && <5.0, arrows, mtl, random >=1.1 && <1.2, hxt, wxcore, wx, machinecell >= 3.0.0
@@ -44,10 +44,11 @@ executable reader
 --   default-language:    Haskell2010
 
 executable xml-parser
-  main-is:               Main.hs
+  main-is:             Main.hs
   other-extensions:    TemplateHaskell
   build-depends:       base >= 4.6 && < 5.0, machinecell >= 3.0.0, mtl, conduit, mmorph,
                        conduit-extra, lens, bytestring, resourcet, transformers,
                        xml-conduit, xml-types, text
   hs-source-dirs:      xml-parser, lib/conduit-adaptor
+  other-modules:       Automaton, ConduitAdaptor
   default-language:    Haskell2010

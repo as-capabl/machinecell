@@ -17,15 +17,14 @@ import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.ArrowUtil
 import qualified Control.Arrow.Machine.Utils as Mc
 
-class 
-    Automaton a m p q | a -> m, a -> p, a -> q
+class
+    Automaton m p q a | a -> m, a -> p, a -> q
   where
     auto :: a -> PlanT p q m r
 
 constructAuto ::
-    (Automaton a m i o, Monad m, ArrowApply ar) =>
-    (forall q. m q -> ar () q) ->
+    (Automaton m i o a, Monad m) =>
     a ->
-    ProcessA ar (Event i) (Event o)
-constructAuto f = constructT f . auto
-    
+    ProcessT m (Event i) (Event o)
+constructAuto = constructT . auto
+
