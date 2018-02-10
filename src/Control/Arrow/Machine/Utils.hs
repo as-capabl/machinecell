@@ -73,7 +73,6 @@ import qualified Control.Category as Cat
 import Control.Monad.Trans
 import Control.Monad.State
 import Control.Arrow
-import Control.Applicative
 #if defined(MIN_VERSION_arrows)
 import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
 #endif

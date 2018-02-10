@@ -125,9 +125,7 @@ import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup, (<>))
 import Data.Maybe (fromMaybe, isNothing, isJust)
-import qualified Control.Monad.Trans.Free as Fr
 import qualified Control.Monad.Trans.Free.Church as F
-import Control.Arrow.Machine.ArrowUtil
 import GHC.Exts (build)
 
 
@@ -1540,20 +1538,20 @@ bToList x = build $ \cons nil -> F.runF x (const nil) (uncurry cons)
 
 -- | Run a machine discarding all results.
 runT_ ::
-    (Monad m, Foldable f) =>
+    (Monad m, Fd.Foldable f) =>
     ProcessT m (Event a) (Event b) ->
     f a -> m ()
 runT_ pa l =
     runT (const $ return ()) pa l
 
 run ::
-    Foldable f =>
+    Fd.Foldable f =>
     ProcessT Identity (Event a) (Event b) ->
     f a -> [b]
 run pa = bToList . runT putB (fit lift pa)
 
 run_ ::
-    (Foldable f, ArrowApply a) =>
+    (Fd.Foldable f, ArrowApply a) =>
     ProcessA a (Event b) (Event c) ->
     a (f b) ()
 run_ pa = proc l -> case runT_ pa l of {ArrowMonad f -> f} -<< ()
