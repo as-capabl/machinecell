@@ -123,7 +123,7 @@ import Control.Monad.Trans.Cont
 import Control.Applicative
 import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
-import Data.Semigroup (Semigroup, (<>))
+import Data.Semigroup (Semigroup ((<>)))
 import Data.Maybe (fromMaybe, isNothing, isJust)
 import qualified Control.Monad.Trans.Free.Church as F
 import GHC.Exts (build)
@@ -135,15 +135,20 @@ import GHC.Exts (build)
 data Phase = Feed | Sweep | Suspend deriving (Eq, Show)
 
 instance
+    Semigroup Phase
+  where
+    (<>) Feed _ = Feed
+    (<>) _ Feed = Feed
+    (<>) Suspend _ = Suspend
+    (<>) _ Suspend = Suspend
+    (<>) Sweep Sweep = Sweep
+
+instance
     Monoid Phase
   where
     mempty = Sweep
 
-    mappend Feed _ = Feed
-    mappend _ Feed = Feed
-    mappend Suspend _ = Suspend
-    mappend _ Suspend = Suspend
-    mappend Sweep Sweep = Sweep
+    mappend = (<>)
 
 
 type ProcType a b c = ProcessT a b c
@@ -375,6 +380,11 @@ instance
     pf <*> px = (pf &&& px) >>> arr (uncurry ($))
 
 instance
+    (Monad m, Semigroup o) => Semigroup (ProcessT m i o)
+  where
+    (<>) = liftA2 (<>)
+
+instance
     (Monad m, Monoid o) => Monoid (ProcessT m i o)
   where
     mempty = pure mempty
@@ -552,17 +562,20 @@ instance
 
 
 instance
+    Semigroup a => Semigroup (Event a)
+  where
+    Event x <> Event y = Event (x <> y)
+    Event x <> _ = Event x
+    _ <> Event y = Event y
+    NoEvent <> _ = NoEvent
+    _ <> NoEvent = NoEvent
+    _ <> _ = End
+
+instance
     Semigroup a => Monoid (Event a)
   where
     mempty = End
-    Event x `mappend` Event y = Event (x <> y)
-    Event x `mappend` _ = Event x
-    _ `mappend` Event y = Event y
-    NoEvent `mappend` _ = NoEvent
-    _ `mappend` NoEvent = NoEvent
-    _ `mappend` _ = End
-
-
+    mappend = (<>)
 
 -- | Signals that can be absent(`NoEvent`) or end.
 -- For composite structure, `collapse` can be defined as monoid sum of all member occasionals.
@@ -605,6 +618,11 @@ end :: Occasional a => a
 end = burst End
 
 data ZeroEvent = ZeroEvent deriving (Eq, Show, Enum, Bounded)
+
+instance
+    Semigroup ZeroEvent
+  where
+    _ <> _ = ZeroEvent
 
 instance
     Monoid ZeroEvent
