@@ -166,11 +166,13 @@ class Stepper m b c s | s -> m, s -> b, s -> c
 -- or arrow combinations of them.
 --
 -- See an introduction at "Control.Arrow.Machine" documentation.
+{-
 data ProcessT m b c = ProcessT {
     paFeed :: b -> m (c, ProcessT m b c),
     paSweep :: b -> m (Maybe c, ProcessT m b c),
     paSuspend :: !(b -> c)
   }
+-}
 
 -- | Isomorphic to ProcessT when 'a' is ArrowApply.
 type ProcessA a = ProcessT (ArrowMonad a)
@@ -178,9 +180,13 @@ type ProcessA a = ProcessT (ArrowMonad a)
 instance
     Stepper a b c (ProcessT a b c)
   where
-    feed = paFeed
-    sweep = paSweep
-    suspend = paSuspend
+    feed (ProcessT evoF) x = case x
+      of
+        Aw y0 f _ -> weakFeed y0 (f x) x
+        Yd _ y p -> return (y, p)
+        M mk = mk >>= \p -> feed p x
+    sweep = undefined
+    suspend = undefined
 
 toProcessT ::
     (Monad m, Stepper m b c s) =>
@@ -718,13 +724,29 @@ muted ::
     (Monad m, Occasional' b, Occasional c) => ProcessT m b c
 muted = arr collapse >>> repeatedly await >>> arr burst
 
--- | A monad type represents time evolution of ProcessT
-newtype Evolution i o m r = Evolution
-  {
-    runEvolution :: Cont (ProcessT m i o) r
-  }
-  deriving
-    (Functor, Applicative, Monad)
+data EvoF_ i o m r
+  where
+    Aw :: o -> (i -> r) -> r -> EvoF i o m r
+    Yd :: o -> o -> r -> EvoF i o m r
+    M :: o -> m r -> EvoF i o m r
+
+newtype EvoF i o m r = EvoF (i -> EvoF_ i o m r) deriving Functor
+
+instance
+    Functor m => Functor (EvoF_ i o m r)
+  where
+    fmap g (Aw y f ff) = Aw y (g . f) (g ff)
+
+newtype Evolution i o m r = Evolution (forall b. (r -> b) -> (EvoF i o m b -> b) -> b -> b)
+
+newtype ProcessT m i o = ProcessT (EvoF i o m (ProcessT m i o))
+
+instance
+    Functor (Evolution i o m r)
+  where
+    fmap g (Evolution k) = Evolution (\pr fr z -> k (pr . g) fr z)
+
+
 
 instance
     Occasional o =>
