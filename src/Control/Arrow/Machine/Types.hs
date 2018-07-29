@@ -125,9 +125,11 @@ import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup ((<>)))
 import Data.Maybe (fromMaybe, isNothing, isJust)
-import qualified Control.Monad.Trans.Free.Church as F
+import qualified Control.Monad.Trans.Free.Church as FT
 import Control.Monad.Free.Church
+import Control.Monad.Free.Church as F
 import Control.Monad.Free
+import qualified Control.Monad.Free as Free
 import GHC.Exts (build)
 
 
@@ -153,6 +155,49 @@ instance
     mappend = (<>)
 
 
+    
+data EvoV i o m a =
+    Aw (i -> a) |
+    Yd o a |
+    M (m a)
+  deriving Functor
+
+data EvoF i o m a = EvoF
+  {
+    suspend :: i -> o,
+    prepare :: i ->EvoV i o m a  
+  }
+  deriving Functor
+
+
+newtype Evolution i o m r = Evolution 
+  {
+    runEvolution :: forall a b. ReaderT (a -> i) (StateT (ProcessT m a b) (F (EvoF a (o, b) m))) r
+  }
+
+instance
+    Functor (Evolution i o m)
+  where
+    fmap g (Evolution k) = Evolution $ fmap g k
+
+instance
+    Applicative (Evolution i o m)
+  where
+    pure x = Evolution $ pure x
+    (<*>) = ap
+
+instance
+    Monad (Evolution i o m)
+  where
+    Evolution mx >>= f = Evolution $ mx >>= runEvolution . f
+
+instance
+    Occasional o =>
+    MonadTrans (Evolution i o)
+  where
+    {-# INLINE lift #-}
+    lift ma = undefined
+
 -- | The stream transducer arrow.
 --
 -- To construct `ProcessT` instances, use `Control.Arrow.Machine.Plan.Plan`,
@@ -160,13 +205,43 @@ instance
 -- or arrow combinations of them.
 --
 -- See an introduction at "Control.Arrow.Machine" documentation.
+newtype ProcessT m i o = ProcessT { runProcess :: Free (EvoF i o m) Void }
+
+evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
+evolve evo = ProcessT $ fromF $ hoistF (hrmap fst) $ fmap fst $
+    runStateT (runReaderT (runEvolution evo) id) Cat.id
+
+toEvolution :: Monad m => ProcessT m i o -> Evolution i o m Void
+toEvolution (ProcessT mx) = Evolution $ ReaderT $ \pre -> Free.iterM (\y -> StateT $ \x -> go pre x y) mx
+  where
+    go pre x y = Evo
+
 {-
-data ProcessT m b c = ProcessT {
-    paFeed :: b -> m (c, ProcessT m b c),
-    paSweep :: b -> m (Maybe c, ProcessT m b c),
-    paSuspend :: !(b -> c)
-  }
+idEvo :: Monad m => Evolution i i m Void
+idEvo = Evolution $ ReaderT $ \_ -> StateT $ \(ProcessT mx) ->
+    fmap (\v -> (v, absurd v)) $ toF mx
 -}
+
+class
+    HProfunctor (p :: * -> * -> (* -> *) -> * -> *)
+  where
+    hdimap :: (a -> b) -> (c -> d) -> p b c m r -> p a d m r
+    
+instance
+    HProfunctor EvoF
+  where
+    hdimap f g (EvoF sus prep) = undefined
+
+instance
+    HProfunctor Evolution
+  where
+    hdimap f g evo = undefined
+
+hlmap :: HProfunctor p => (a -> b) -> p b c m r -> p a c m r
+hlmap f = hdimap f id
+
+hrmap :: HProfunctor p => (b -> c) -> p a b m r -> p a c m r
+hrmap g = hdimap id g
 
 -- | Isomorphic to ProcessT when 'a' is ArrowApply.
 type ProcessA a = ProcessT (ArrowMonad a)
@@ -194,7 +269,7 @@ fitW extr f pa = undefined
 instance
     Monad m => Profunctor (ProcessT m)
   where
-    dimap = undefined
+    dimap f g (ProcessT mx) = ProcessT $ undefined 
     {-# INLINE dimap #-}
 
 
@@ -499,33 +574,6 @@ muted ::
     (Monad m, Occasional' b, Occasional c) => ProcessT m b c
 muted = arr collapse >>> repeatedly await >>> arr burst
 
-data EvoF i o m a =
-    Aw (i -> o) (i -> a) |
-    Yd (i -> o) o a |
-    M (i -> o) (m a)
-  deriving Functor
-
-newtype Evolution i o m r = Evolution 
-  {
-    runEvolution :: forall a b. (a -> i) -> StateT (ProcessT m a b) (F (EvoF a (o, b) m)) r
-  }
-
-newtype ProcessT m i o = ProcessT { runProcess :: Free (EvoF i o m) Void }
-
-instance
-    Functor (Evolution i o m)
-  where
-    fmap g (Evolution k) = Evolution (\pre -> fmap g $ k pre)
-
-
-
-instance
-    Occasional o =>
-    MonadTrans (Evolution i o)
-  where
-    {-# INLINE lift #-}
-    lift ma = undefined
-
 {-
 instance
     (MonadIO m, Occasional o) =>
@@ -551,7 +599,7 @@ instance
 
 
 newtype PlanT i o m a =
-    PlanT { freePlanT :: F.FT (PlanF i o) m a }
+    PlanT { freePlanT :: FT.FT (PlanF i o) m a }
   deriving
     (Functor, Applicative, Monad)
 
@@ -1275,13 +1323,13 @@ runT outpre0 pa0 xs =
     outpre = lift . outpre0
 -}
 
-type Builder b = F.F ((,) b)
+type Builder b = FT.F ((,) b)
 
 putB :: b -> Builder b ()
-putB x = F.liftF (x, ())
+putB x = FT.liftF (x, ())
 
 bToList :: Builder b a -> [b]
-bToList x = build $ \cons nil -> F.runF x (const nil) (uncurry cons)
+bToList x = build $ \cons nil -> FT.runF x (const nil) (uncurry cons)
 
 -- | Run a machine discarding all results.
 runT_ ::
