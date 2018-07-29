@@ -63,9 +63,9 @@ module
         -- * Evolution monad
         -- | Time-evolution monad, or generalized plan monad.
         Evolution(..),
-        packProc,
-        awaitProc,
-        yieldProc,
+        -- packProc,
+        -- awaitProc,
+        -- yieldProc,
 
         -- * Running machines (at once)
         runT,
@@ -1239,7 +1239,7 @@ sweepAll lft outpre =
 
 breakCont :: Monad m => r -> ContT r m a
 breakCont = ContT . const . return
-
+-}
 
 -- | Run a machine.
 runT ::
@@ -1247,6 +1247,8 @@ runT ::
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
+runT = undefined
+{-
 runT outpre0 pa0 xs =
     runRM pa0 $
       do
@@ -1271,6 +1273,7 @@ runT outpre0 pa0 xs =
         sweepAll id outpre
 
     outpre = lift . outpre0
+-}
 
 type Builder b = F.F ((,) b)
 
@@ -1300,12 +1303,13 @@ run_ ::
     a (f b) ()
 run_ pa = proc l -> case runT_ pa l of {ArrowMonad f -> f} -<< ()
 
+{-
 lftRM :: (Monad m, Monad m') =>
     (forall p. m p -> m' p) ->
     RM i o m a ->
     StateT (RunInfo i o m) m' a
 lftRM lft' st = StateT $ \s -> lft' $ runStateT st s
-
+-}
 
 -- | Execute until an input consumed and the machine suspends.
 --
@@ -1327,6 +1331,8 @@ stepRun ::
     a -- ^ The argument to the machine.
       ->
     m' (ProcessT m (Event a) (Event b))
+stepRun _ _ _ _ = undefined
+{-
 stepRun lft yd stp pa0 x =
   do
     pa <- runRM pa0 $
@@ -1350,7 +1356,7 @@ stepRun lft yd stp pa0 x =
         pa <- lftRM lft freeze
         return pa
     return pa
-
+-}
 
 -- | Execute until an output produced.
 --
@@ -1370,6 +1376,8 @@ stepYield ::
     ProcessT m (Event a) (Event b) -- ^ The machine to run.
       ->
     m' (Maybe b, ProcessT m (Event a) (Event b))
+stepYield _ _ _ _ = undefined
+{-
 stepYield lft aw stp pa0 = runRM pa0 $
   do
     r <- go False
