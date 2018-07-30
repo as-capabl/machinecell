@@ -172,7 +172,7 @@ data EvoF i o m a = EvoF
 
 newtype Evolution i o m r = Evolution 
   {
-    runEvolution :: forall a b. ReaderT (a -> i) (StateT (ProcessT m a b) (F (EvoF a (o, b) m))) r
+    runEvolution :: forall a b. ReaderT (b -> i) (StateT (ProcessT m a b) (F (EvoF a (o, b) m))) r
   }
 
 instance
@@ -207,14 +207,34 @@ instance
 -- See an introduction at "Control.Arrow.Machine" documentation.
 newtype ProcessT m i o = ProcessT { runProcess :: Free (EvoF i o m) Void }
 
+runEvo evo pre ups = F.runF $ runStateT (runReaderT (runEvolution evo) pre) ups
+
+makeEvo ::
+    (forall a b s.
+        (b -> i) -> 
+        ProcessT m a b ->
+        ((r, ProcessT m a b) -> s) ->
+        (EvoF a (o, b) m s -> s) ->
+        s) ->
+    Evolution i o m r
+makeEvo f = Evolution $ ReaderT $ \pre -> StateT $ \ups -> F (f pre ups)
+
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
 evolve evo = ProcessT $ fromF $ hoistF (hrmap fst) $ fmap fst $
     runStateT (runReaderT (runEvolution evo) id) Cat.id
 
-toEvolution :: Monad m => ProcessT m i o -> Evolution i o m Void
-toEvolution (ProcessT mx) = Evolution $ ReaderT $ \pre -> Free.iterM (\y -> StateT $ \x -> go pre x y) mx
+finishWith :: Monad m => ProcessT m i o -> Evolution i o m Void
+finishWith (ProcessT mx) =
+    Evolution $ ReaderT $ \pre ->
+        Free.iterM (\y -> StateT $ \x -> goF pre x y) mx
   where
-    go pre x y = Evo
+    goF pre origX@(ProcessT (Free x)) y =
+        F.liftF $ EvoF ((suspend y . pre &&& id) . suspend x) $ \i ->
+            goV origX (suspend x i) (prepare x i) (prepare y $ pre (suspend x i))
+    goF _ (ProcessT (Pure v)) _ = absurd v
+
+    goV origX susX x (M my) = undefined -- M $ my >>= \y -> goV origS x y
+    goV origX susX x (Yd o y) = Yd (o, susX) undefined -- (x, origS)
 
 {-
 idEvo :: Monad m => Evolution i i m Void
