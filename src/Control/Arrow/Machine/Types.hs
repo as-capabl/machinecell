@@ -205,7 +205,7 @@ instance
 -- or arrow combinations of them.
 --
 -- See an introduction at "Control.Arrow.Machine" documentation.
-newtype ProcessT m i o = ProcessT { runProcess :: Free (EvoF i o m) Void }
+newtype ProcessT m i o = ProcessT { runProcessT :: Free (EvoF i o m) Void }
 
 runEvo evo pre ups = F.runF $ runStateT (runReaderT (runEvolution evo) pre) ups
 
@@ -219,22 +219,29 @@ makeEvo ::
     Evolution i o m r
 makeEvo f = Evolution $ ReaderT $ \pre -> StateT $ \ups -> F (f pre ups)
 
-evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
-evolve evo = ProcessT $ fromF $ hoistF (hrmap fst) $ fmap fst $
+toFreeEvo :: Monad m => Evolution i o m r -> Free (EvoF i o m) r
+toFreeEvo evo = fromF $ hoistF (hrmap fst) $ fmap fst $
     runStateT (runReaderT (runEvolution evo) id) Cat.id
 
-finishWith :: Monad m => ProcessT m i o -> Evolution i o m Void
-finishWith (ProcessT mx) =
+fromFreeEvo :: Monad m => Free (EvoF i o m) r -> Evolution i o m r
+fromFreeEvo mx =
     Evolution $ ReaderT $ \pre ->
-        Free.iterM (\y -> StateT $ \x -> goF pre x y) mx
+        Free.iterM (\y -> get >>= \x -> goF pre x y >>= id) mx
   where
     goF pre origX@(ProcessT (Free x)) y =
-        F.liftF $ EvoF ((suspend y . pre &&& id) . suspend x) $ \i ->
+        lift $ F.liftF $ EvoF ((suspend y . pre &&& id) . suspend x) $ \i ->
             goV origX (suspend x i) (prepare x i) (prepare y $ pre (suspend x i))
     goF _ (ProcessT (Pure v)) _ = absurd v
 
-    goV origX susX x (M my) = undefined -- M $ my >>= \y -> goV origS x y
-    goV origX susX x (Yd o y) = Yd (o, susX) undefined -- (x, origS)
+    goV _ _ _ (M msy) = M msy
+    goV _ susX _ (Yd o sy) = Yd (o, susX) sy
+    goV _ susX (Yd z nextX) (Aw f) = undefined
+
+evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
+evolve = ProcessT . toFreeEvo 
+
+finishWith :: Monad m => ProcessT m i o -> Evolution i o m Void
+finishWith = fromFreeEvo . runProcessT
 
 {-
 idEvo :: Monad m => Evolution i i m Void
