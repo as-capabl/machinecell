@@ -225,8 +225,7 @@ toFreeEvo evo = fromF $ hoistF (hrmap fst) $ fmap fst $
 
 fromFreeEvo :: Monad m => Free (EvoF i o m) r -> Evolution i o m r
 fromFreeEvo mx =
-    Evolution $ ReaderT $ \pre ->
-        Free.iterM (\y -> get >>= \x -> join (lift $ F $ \pr fr -> goF pr fr pre x y)) mx
+    Free.iterM (\y -> join (makeEvo $ \pre x pr fr -> goF pr fr pre x y)) mx
   where
     unFree (Free x) = x
     unFree (Pure v) = absurd v
@@ -241,9 +240,11 @@ fromFreeEvo mx =
               in
                 case (vX, vY)
                   of
-                    (_, M msy) -> M (pr <$> msy)
-                    (_, Yd o sy) -> Yd (o, susX) $ pr sy
-                    (Yd z nextX, Aw f) -> undefined
+                    (_, M mnext) -> M (pr . (, origX) <$> mnext)
+                    (_, Yd o next) -> Yd (o, susX) $ pr (next, origX)
+                    (M mx', Aw f) -> M (mx' >>= \x' -> return $ goF pr fr pre (ProcessT x') y)
+                    (Yd z x', Aw f) -> M (return $ pr (f z, ProcessT x'))
+                    (Aw g, Aw f) -> undefined
 
     
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
