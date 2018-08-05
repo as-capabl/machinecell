@@ -10,8 +10,6 @@ module
         dkSwitchAfter,
         gSwitchAfter,
         dgSwitchAfter,
-        finishWith,
-        evolve
       )
 where
 

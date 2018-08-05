@@ -66,6 +66,8 @@ module
         -- packProc,
         -- awaitProc,
         -- yieldProc,
+        evolve,
+        finishWith,
 
         -- * Running machines (at once)
         runT,
@@ -110,7 +112,7 @@ module
 where
 
 import qualified Control.Category as Cat
-import Data.Profunctor (Profunctor, dimap, rmap)
+import Data.Profunctor (Profunctor, dimap, rmap, lmap)
 import Data.Void
 import Control.Arrow
 import Control.Monad
@@ -138,22 +140,6 @@ import GHC.Exts (build)
 -- Once a value `Feed`ed, the machine is `Sweep`ed until it `Suspend`s.
 data Phase = Feed | Sweep | Suspend deriving (Eq, Show)
 
-instance
-    Semigroup Phase
-  where
-    (<>) Feed _ = Feed
-    (<>) _ Feed = Feed
-    (<>) Suspend _ = Suspend
-    (<>) _ Suspend = Suspend
-    (<>) Sweep Sweep = Sweep
-
-instance
-    Monoid Phase
-  where
-    mempty = Sweep
-
-    mappend = (<>)
-
 
     
 data EvoV i o m a =
@@ -172,7 +158,7 @@ data EvoF i o m a = EvoF
 
 newtype Evolution i o m r = Evolution 
   {
-    runEvolution :: forall a b. ReaderT (b -> i) (StateT (ProcessT m a b) (F (EvoF a (o, b) m))) r
+    runEvolution :: forall a b. ReaderT (a -> i) (StateT (ProcessT m (o, a) b) (F (EvoF a b m))) r
   }
 
 instance
@@ -196,7 +182,7 @@ instance
     MonadTrans (Evolution i o)
   where
     {-# INLINE lift #-}
-    lift ma = undefined
+    lift ma = fromFreeEvo $ Free.liftF $ EvoF (const noEvent) (\_ -> M ma) 
 
 -- | The stream transducer arrow.
 --
@@ -211,10 +197,10 @@ runEvo evo pre ups = F.runF $ runStateT (runReaderT (runEvolution evo) pre) ups
 
 makeEvo ::
     (forall a b s.
-        (b -> i) -> 
-        ProcessT m a b ->
-        ((r, ProcessT m a b) -> s) ->
-        (EvoF a (o, b) m s -> s) ->
+        (a -> i) -> 
+        ProcessT m (o, a) b ->
+        ((r, ProcessT m (o, a) b) -> s) ->
+        (EvoF a b m s -> s) ->
         s) ->
     Evolution i o m r
 makeEvo f = Evolution $ ReaderT $ \pre -> StateT $ \ups -> F (f pre ups)
@@ -225,26 +211,26 @@ toFreeEvo evo = fromF $ hoistF (hrmap fst) $ fmap fst $
 
 fromFreeEvo :: Monad m => Free (EvoF i o m) r -> Evolution i o m r
 fromFreeEvo mx =
-    Free.iterM (\y -> join (makeEvo $ \pre x pr fr -> goF pr fr pre x y)) mx
+    Free.iterM (\x -> join (makeEvo $ \pre y pr fr -> goF pr fr pre x (runProcessT y))) mx
   where
     unFree (Free x) = x
     unFree (Pure v) = absurd v
 
-    goF pr fr pre origX@(ProcessT x0) y =
-        fr $ EvoF ((suspend y . pre &&& id) . suspend (unFree x0)) $ \i ->
+    goF pr fr pre x y0 =
+        fr $ EvoF (suspend (unFree y0) . (suspend x . pre &&& id) ) $ \i ->
             let
-                x = unFree x0
-                susX = suspend x i
-                vX = prepare x i
-                vY = prepare y $ pre susX
+                y = unFree y0
+                susX = suspend x $ pre i
+                vX = prepare x $ pre i
+                vY = prepare y (susX, i)
               in
                 case (vX, vY)
                   of
-                    (_, M mnext) -> M (pr . (, origX) <$> mnext)
-                    (_, Yd o next) -> Yd (o, susX) $ pr (next, origX)
-                    (M mx', Aw f) -> M (mx' >>= \x' -> return $ goF pr fr pre (ProcessT x') y)
-                    (Yd z x', Aw f) -> M (return $ pr (f z, ProcessT x'))
-                    (Aw g, Aw f) -> undefined
+                    (_, M my') -> M (goF pr fr pre x <$> my')
+                    (_, Yd o y') -> Yd o $ goF pr fr pre x y'
+                    (M mx', Aw _) -> M (mx' >>= return . pr . (, ProcessT y0))
+                    (Yd z x', Aw f) -> M $ return $ pr (x', ProcessT $ f (z, i))
+                    (Aw g, Aw _) -> Aw $ pr . (, ProcessT y0) . g . pre
 
     
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
@@ -260,24 +246,47 @@ idEvo = Evolution $ ReaderT $ \_ -> StateT $ \(ProcessT mx) ->
 -}
 
 class
-    HProfunctor (p :: * -> * -> (* -> *) -> * -> *)
+    HProfunctor p1 p2 a b c d | p1 -> b, p1 -> c, p2 -> a, p2 -> d, p1 a d -> p2, p2 b c -> p1
   where
-    hdimap :: (a -> b) -> (c -> d) -> p b c m r -> p a d m r
+    hdimap :: (a -> b) -> (c -> d) -> p1 r -> p2 r
     
-instance
-    HProfunctor EvoF
-  where
-    hdimap f g (EvoF sus prep) = undefined
 
 instance
-    HProfunctor Evolution
+    HProfunctor (EvoV b c m) (EvoV a d m) a b c d
   where
-    hdimap f g evo = undefined
+    hdimap f _ (Aw x) = Aw (x . f)
+    hdimap _ g (Yd o x) = Yd (g o) x
+    hdimap _ _ (M mx) = M mx
 
-hlmap :: HProfunctor p => (a -> b) -> p b c m r -> p a c m r
+instance
+    HProfunctor (EvoF b c m) (EvoF a d m) a b c d
+  where
+    hdimap f g (EvoF sus prep) = EvoF (dimap f g sus) (hdimap f g . prep . f)
+
+instance
+    HProfunctor f1 f2 a b c d =>
+    HProfunctor (F f1) (F f2) a b c d
+  where
+    hdimap f g = F.hoistF $ hdimap f g
+
+instance
+    (HProfunctor f1 f2 a b c d, Functor f1, Functor f2) =>
+    HProfunctor (Free f1) (Free f2) a b c d
+  where
+    hdimap f g = Free.hoistFree $ hdimap f g
+
+{-
+instance
+    Monad m =>
+    HProfunctor (Evolution b c m) (Evolution a d m) a b c d
+  where
+    hdimap f g = fromFreeEvo . hdimap f g . toFreeEvo
+-}
+
+hlmap :: HProfunctor p1 p2 a b c c => (a -> b) -> p1 r -> p2 r
 hlmap f = hdimap f id
 
-hrmap :: HProfunctor p => (b -> c) -> p a b m r -> p a c m r
+hrmap :: HProfunctor p1 p2 a a b c => (b -> c) -> p1 r -> p2 r
 hrmap g = hdimap id g
 
 -- | Isomorphic to ProcessT when 'a' is ArrowApply.
@@ -823,8 +832,8 @@ realizePlan ::
     Monad m =>
     PlanT i o m a ->
     Evolution (Event i) (Event o) m a
-realizePlan pl = undefined
 
+realizePlan pl = undefined
 {-# INLINE repeatedlyT #-}
 repeatedlyT ::
     Monad m =>
@@ -853,6 +862,10 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 -- Switches
 --
 
+switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
+switchAfter sf = makeEvo $ \pre dws pr fr ->
+    runEvo (finishWith sf) pre (lmap (\((x, _), d) -> (x, d)) dws) (absurd . fst) undefined
+
 -- |Run the 1st transducer at the beggining. Then switch to 2nd when Event t occurs.
 --
 -- >>> :{
@@ -871,7 +884,10 @@ switch ::
     ProcessT m b (c, Event t) ->
     (t -> ProcessT m b c) ->
     ProcessT m b c
-switch sf k = undefined
+switch sf k = evolve $
+  do
+    x <- switchAfter sf
+    finishWith $ k x
 
 
 -- |Delayed version of `switch`
