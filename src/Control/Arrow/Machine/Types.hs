@@ -225,13 +225,13 @@ toFreeEvo evo = fst $ runState (FT.runFT (runReaderT (runEvolution evo) id) pr f
 
 fromFreeEvo :: Monad m => Free (EvoF i o m) r -> Evolution i o m r
 fromFreeEvo mx =
-    Free.iterM (\x -> join (makeEvo $ \pre pr fr y -> goF pr fr pre x y)) mx
+    Free.iterM (\x -> join (makeEvo $ \pre pr fr y -> runState (goF pr fr pre x) y)) mx
   where
     unFree (Free x) = x
     unFree (Pure v) = absurd v
 
-    goF pr fr pre x y0 = runState `flip` y0 $ 
-        fr id $ EvoF (suspend (unFree $ runProcessT y0) . (suspend x . pre &&& id) ) $ \i ->
+    goF pr fr pre x = get >>= \y0 -> 
+        fr (\(r, s) -> put s >> return r) $ EvoF (suspend (unFree $ runProcessT y0) . (suspend x . pre &&& id) ) $ \i ->
             let
                 y = unFree $ runProcessT y0
                 susX = suspend x $ pre i
@@ -240,11 +240,11 @@ fromFreeEvo mx =
               in
                 case (vX, vY)
                   of
-                    (_, M my') -> M undefined -- (goF pr fr pre x <$> my')
-                    (_, Yd o y') -> Yd o $ undefined -- goF pr fr pre x y'
+                    (_, M my') -> M (ProcessT <$> my' >>= \y' -> return $ put y' >> goF pr fr pre x)
+                    (_, Yd o y') -> Yd o $ put (ProcessT y') >> goF pr fr pre x
                     (M mx', Aw _) -> M undefined -- (mx' >>= return . pr . (, ProcessT y0))
                     (Yd z x', Aw f) -> M undefined -- $ return $ pr (x', ProcessT $ f (z, i))
-                    (Aw g, Aw _) -> Aw $ \x -> runState (pr (g (pre x))) y0
+                    (Aw g, Aw _) -> Aw $ \x -> pr (g (pre x))
 
     
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
