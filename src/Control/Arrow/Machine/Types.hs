@@ -127,8 +127,9 @@ import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup ((<>)))
 import Data.Maybe (fromMaybe, isNothing, isJust)
+import Control.Monad.Trans.Free.Church (FT ())
 import qualified Control.Monad.Trans.Free.Church as FT
-import Control.Monad.Free.Church
+import Control.Monad.Free.Church (F ())
 import Control.Monad.Free.Church as F
 import Control.Monad.Free
 import qualified Control.Monad.Free as Free
@@ -158,7 +159,7 @@ data EvoF i o m a = EvoF
 
 newtype Evolution i o m r = Evolution 
   {
-    runEvolution :: forall a b. ReaderT (a -> i) (StateT (ProcessT m (o, a) b) (F (EvoF a b m))) r
+    runEvolution :: forall a b. ReaderT (a -> i) (FT (EvoF a b m) (State (ProcessT m (o, a) b))) r
   }
 
 instance
@@ -193,44 +194,57 @@ instance
 -- See an introduction at "Control.Arrow.Machine" documentation.
 newtype ProcessT m i o = ProcessT { runProcessT :: Free (EvoF i o m) Void }
 
-runEvo evo pre ups = F.runF $ runStateT (runReaderT (runEvolution evo) pre) ups
+runEvo ::
+    Evolution i o m r ->
+    (a -> i) -> 
+    (r -> State (ProcessT m (o, a) b) s) ->
+    (forall x. (x -> State (ProcessT m (o, a) b) s) ->
+        EvoF a b m x -> State (ProcessT m (o, a) b) s) ->
+    ProcessT m (o, a) b ->
+    (s, ProcessT m (o, a) b)
+runEvo evo pre pr fr = runState $ FT.runFT (runReaderT (runEvolution evo) pre) pr fr
 
 makeEvo ::
     (forall a b s.
         (a -> i) -> 
+        (r -> State (ProcessT m (o, a) b) s) ->
+        (forall x. (x -> State (ProcessT m (o, a) b) s) ->
+            EvoF a b m x -> State (ProcessT m (o, a) b) s) ->
         ProcessT m (o, a) b ->
-        ((r, ProcessT m (o, a) b) -> s) ->
-        (EvoF a b m s -> s) ->
-        s) ->
+        (s, ProcessT m (o, a) b)
+      ) ->
     Evolution i o m r
-makeEvo f = Evolution $ ReaderT $ \pre -> StateT $ \ups -> F (f pre ups)
+makeEvo f = Evolution $ ReaderT $ \pre -> FT.FT $ \pr fr -> state (f pre pr fr) 
 
 toFreeEvo :: Monad m => Evolution i o m r -> Free (EvoF i o m) r
-toFreeEvo evo = fromF $ hoistF (hrmap fst) $ fmap fst $
-    runStateT (runReaderT (runEvolution evo) id) Cat.id
+toFreeEvo evo = fst $ runState (FT.runFT (runReaderT (runEvolution evo) id) pr fr) (arr fst)
+  where
+    pr = return . return
+    fr next fx = return $ wrap $ fmap `flip` fx $ \x -> fst $ runState (next x) (arr fst)
+
 
 fromFreeEvo :: Monad m => Free (EvoF i o m) r -> Evolution i o m r
 fromFreeEvo mx =
-    Free.iterM (\x -> join (makeEvo $ \pre y pr fr -> goF pr fr pre x (runProcessT y))) mx
+    Free.iterM (\x -> join (makeEvo $ \pre pr fr y -> goF pr fr pre x y)) mx
   where
     unFree (Free x) = x
     unFree (Pure v) = absurd v
 
-    goF pr fr pre x y0 =
-        fr $ EvoF (suspend (unFree y0) . (suspend x . pre &&& id) ) $ \i ->
+    goF pr fr pre x y0 = runState `flip` y0 $ 
+        fr id $ EvoF (suspend (unFree $ runProcessT y0) . (suspend x . pre &&& id) ) $ \i ->
             let
-                y = unFree y0
+                y = unFree $ runProcessT y0
                 susX = suspend x $ pre i
                 vX = prepare x $ pre i
                 vY = prepare y (susX, i)
               in
                 case (vX, vY)
                   of
-                    (_, M my') -> M (goF pr fr pre x <$> my')
-                    (_, Yd o y') -> Yd o $ goF pr fr pre x y'
-                    (M mx', Aw _) -> M (mx' >>= return . pr . (, ProcessT y0))
-                    (Yd z x', Aw f) -> M $ return $ pr (x', ProcessT $ f (z, i))
-                    (Aw g, Aw _) -> Aw $ pr . (, ProcessT y0) . g . pre
+                    (_, M my') -> M undefined -- (goF pr fr pre x <$> my')
+                    (_, Yd o y') -> Yd o $ undefined -- goF pr fr pre x y'
+                    (M mx', Aw _) -> M undefined -- (mx' >>= return . pr . (, ProcessT y0))
+                    (Yd z x', Aw f) -> M undefined -- $ return $ pr (x', ProcessT $ f (z, i))
+                    (Aw g, Aw _) -> Aw $ \x -> runState (pr (g (pre x))) y0
 
     
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
