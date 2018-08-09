@@ -159,7 +159,7 @@ data EvoF i o m a = EvoF
 
 newtype Evolution i o m r = Evolution 
   {
-    runEvolution :: forall a b. ReaderT (a -> i) (FT (EvoF a b m) (State (ProcessT m (o, a) b))) r
+    runEvolution :: F (EvoF i o m) r
   }
 
 instance
@@ -183,7 +183,7 @@ instance
     MonadTrans (Evolution i o)
   where
     {-# INLINE lift #-}
-    lift ma = fromFreeEvo $ Free.liftF $ EvoF (const noEvent) (\_ -> M ma) 
+    lift ma = Evolution $ Free.liftF $ EvoF (const noEvent) (\_ -> M ma) 
 
 -- | The stream transducer arrow.
 --
@@ -194,64 +194,42 @@ instance
 -- See an introduction at "Control.Arrow.Machine" documentation.
 newtype ProcessT m i o = ProcessT { runProcessT :: Free (EvoF i o m) Void }
 
-runEvo ::
-    Evolution i o m r ->
-    (a -> i) -> 
-    (r -> State (ProcessT m (o, a) b) s) ->
-    (forall x. (x -> State (ProcessT m (o, a) b) s) ->
-        EvoF a b m x -> State (ProcessT m (o, a) b) s) ->
-    ProcessT m (o, a) b ->
-    (s, ProcessT m (o, a) b)
-runEvo evo pre pr fr = runState $ FT.runFT (runReaderT (runEvolution evo) pre) pr fr
-
-makeEvo ::
-    (forall a b s.
-        (a -> i) -> 
-        (r -> State (ProcessT m (o, a) b) s) ->
-        (forall x. (x -> State (ProcessT m (o, a) b) s) ->
-            EvoF a b m x -> State (ProcessT m (o, a) b) s) ->
-        ProcessT m (o, a) b ->
-        (s, ProcessT m (o, a) b)
-      ) ->
-    Evolution i o m r
-makeEvo f = Evolution $ ReaderT $ \pre -> FT.FT $ \pr fr -> state (f pre pr fr) 
-
+{-
 toFreeEvo :: Monad m => Evolution i o m r -> Free (EvoF i o m) r
 toFreeEvo evo = fst $ runState (FT.runFT (runReaderT (runEvolution evo) id) pr fr) (arr fst)
   where
     pr = return . return
     fr next fx = return $ wrap $ fmap `flip` fx $ \x -> fst $ runState (next x) (arr fst)
+-}
 
-
-fromFreeEvo :: Monad m => Free (EvoF i o m) r -> Evolution i o m r
-fromFreeEvo mx =
-    Free.iterM (\x -> join (makeEvo $ \pre pr fr -> runState (goF pr fr pre x))) mx
-  where
-    unFree (Free x) = x
-    unFree (Pure v) = absurd v
-
-    goF pr fr pre x = get >>= \y0 -> 
-        fr id $ EvoF (suspend (unFree $ runProcessT y0) . (suspend x . pre &&& id) ) $ \i ->
+fuse :: Monad m => Evolution b c m r -> ProcessT m a b -> Evolution a c m r
+fuse q0 p0 = Evolution $ F $ \pr0 fr0 -> 
+    let
+        pr x _ = pr0 x
+        fr q p = fr0 $ EvoF (suspend q . suspend (unFree p)) $ \i ->
             let
-                y = unFree $ runProcessT y0
-                susX = suspend x $ pre i
-                vX = prepare x $ pre i
-                vY = prepare y (susX, i)
+                susX = suspend (unFree p) i
+                vQ = prepare q susX
+                vP = prepare (unFree p) i
               in
-                case (vX, vY)
+                case (vP, vQ)
                   of
-                    (_, M my') -> M (ProcessT <$> my' >>= \y' -> return $ put y' >> goF pr fr pre x)
-                    (_, Yd o y') -> Yd o $ put (ProcessT y') >> goF pr fr pre x
-                    (M mx', Aw _) -> M (pr <$> mx')
-                    (Yd z x', Aw f) -> M $ return $ put (ProcessT $ f (z, i)) >> pr x'
-                    (Aw g, Aw _) -> Aw $ \x -> pr (g (pre x))
-
+                    (_, M mq') -> M (($p) <$> mq')
+                    (_, Yd o q') -> Yd o $ q' p
+                    (M mp', Aw _) -> M (fr q <$> mp')
+                    (Yd z p', Aw g) -> M (return $ g z p')
+                    (Aw f, Aw _) -> Aw $ fr q . f 
+      in
+        F.runF (runEvolution q0) pr fr (runProcessT p0)
+  where
+    unFree (Pure v) = absurd v
+    unFree (Free x) = x
     
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
-evolve = ProcessT . toFreeEvo 
+evolve = ProcessT . F.fromF . runEvolution
 
 finishWith :: Monad m => ProcessT m i o -> Evolution i o m Void
-finishWith = fromFreeEvo . runProcessT
+finishWith = Evolution . F.toF . runProcessT
 
 {-
 idEvo :: Monad m => Evolution i i m Void
@@ -876,11 +854,18 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 -- Switches
 --
 
-switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-switchAfter sf = makeEvo $ \pre pr fr dws ->
-    runState (FT.runFT (go $ runReaderT (runEvolution $ finishWith sf) pre) pr fr) dws
-  where
-    go  = undefined
+dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
+dSwitchAfter p0 = Evolution $ F $ \pr0 fr0 ->
+    let
+        fr p = fr0 $ EvoF (fst . suspend p) $ \i ->
+            case (prepare p i)
+              of
+                Yd (x, Event t) _ -> Yd x (pr0 t)
+                Yd (x, _) next -> Yd x next
+                Aw fnext -> Aw fnext
+                M mnext -> M mnext
+      in
+        F.runF (runEvolution $ finishWith p0) absurd fr
 
 -- |Run the 1st transducer at the beggining. Then switch to 2nd when Event t occurs.
 --
@@ -924,7 +909,10 @@ dSwitch ::
     ProcessT m b (c, Event t) ->
     (t -> ProcessT m b c) ->
     ProcessT m b c
-dSwitch sf k = undefined
+dSwitch sf k =  evolve $
+  do
+    x <- dSwitchAfter sf
+    finishWith $ k x
 
 -- |Recurring switch.
 --
