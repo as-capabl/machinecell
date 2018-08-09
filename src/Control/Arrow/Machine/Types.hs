@@ -225,13 +225,13 @@ toFreeEvo evo = fst $ runState (FT.runFT (runReaderT (runEvolution evo) id) pr f
 
 fromFreeEvo :: Monad m => Free (EvoF i o m) r -> Evolution i o m r
 fromFreeEvo mx =
-    Free.iterM (\x -> join (makeEvo $ \pre pr fr y -> runState (goF pr fr pre x) y)) mx
+    Free.iterM (\x -> join (makeEvo $ \pre pr fr -> runState (goF pr fr pre x))) mx
   where
     unFree (Free x) = x
     unFree (Pure v) = absurd v
 
     goF pr fr pre x = get >>= \y0 -> 
-        fr (\(r, s) -> put s >> return r) $ EvoF (suspend (unFree $ runProcessT y0) . (suspend x . pre &&& id) ) $ \i ->
+        fr id $ EvoF (suspend (unFree $ runProcessT y0) . (suspend x . pre &&& id) ) $ \i ->
             let
                 y = unFree $ runProcessT y0
                 susX = suspend x $ pre i
@@ -242,8 +242,8 @@ fromFreeEvo mx =
                   of
                     (_, M my') -> M (ProcessT <$> my' >>= \y' -> return $ put y' >> goF pr fr pre x)
                     (_, Yd o y') -> Yd o $ put (ProcessT y') >> goF pr fr pre x
-                    (M mx', Aw _) -> M undefined -- (mx' >>= return . pr . (, ProcessT y0))
-                    (Yd z x', Aw f) -> M undefined -- $ return $ pr (x', ProcessT $ f (z, i))
+                    (M mx', Aw _) -> M (pr <$> mx')
+                    (Yd z x', Aw f) -> M $ return $ put (ProcessT $ f (z, i)) >> pr x'
                     (Aw g, Aw _) -> Aw $ \x -> pr (g (pre x))
 
     
@@ -877,8 +877,10 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 --
 
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-switchAfter sf = makeEvo $ \pre dws pr fr ->
-    runEvo (finishWith sf) pre (lmap (\((x, _), d) -> (x, d)) dws) (absurd . fst) undefined
+switchAfter sf = makeEvo $ \pre pr fr dws ->
+    runState (FT.runFT (go $ runReaderT (runEvolution $ finishWith sf) pre) pr fr) dws
+  where
+    go  = undefined
 
 -- |Run the 1st transducer at the beggining. Then switch to 2nd when Event t occurs.
 --
