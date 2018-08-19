@@ -1423,9 +1423,9 @@ runT ::
 runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF False . Fd.toList
   where
     frF evoF b l = frV (prepare evoF NoEvent) b l
-    frV (Aw f) True _ = return ()
     frV (Aw f) False (x:xs) = f (Event x) False xs
     frV (Aw f) False [] = f End True []
+    frV (Aw _) True _ = return ()
     frV (Yd (Event x) next) b l = outpre x >> next b l
     frV (Yd NoEvent next) b l = next b l
     frV (Yd End next) b _ = next b []
