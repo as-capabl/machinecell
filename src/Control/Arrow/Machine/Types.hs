@@ -402,7 +402,7 @@ instance
                     (Yd y p', Yd ya next) -> Yd (y, ya) $ next p'
                     (_, Yd ya next) -> Yd (suspend (unFree p) sus, ya) $ next p
                     (Yd y p', _) -> Yd (y, suspend paStep susA) $ fr paStep p'
-                    (Aw fp', Aw fnext) -> Aw (\(x, xa) -> fnext xa (fp' x)) -- Don't ignore snd!
+                    (Aw fp', Aw fnext) -> Aw (\(x, xa) -> fnext xa (fp' x))
             unFree (Pure v) = absurd v
             unFree (Free x) = x
           in
@@ -879,7 +879,7 @@ switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 switchAfter p0 = Evolution $ F $ \pr0 fr0 ->
     let
         fr p = fr0 $ EvoF (fst . suspend p) $ \i ->
-            case (prepare p i)
+            case prepare p i
               of
                 Yd (_, Event t) _ -> M (return $ pr0 t)
                 Yd (x, _) next -> Yd x next
@@ -893,7 +893,7 @@ dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 dSwitchAfter p0 = Evolution $ F $ \pr0 fr0 ->
     let
         fr p = fr0 $ EvoF (fst . suspend p) $ \i ->
-            case (prepare p i)
+            case prepare p i
               of
                 Yd (x, Event t) _ -> Yd x (pr0 t)
                 Yd (x, _) next -> Yd x next
@@ -1434,6 +1434,7 @@ runT ::
 runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF False . Fd.toList
   where
     frF evoF b l = frV (prepare evoF NoEvent) b l
+
     frV (Aw f) False (x:xs) = f (Event x) False xs
     frV (Aw f) False [] = f End True []
     frV (Aw _) True _ = return ()

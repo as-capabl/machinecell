@@ -198,7 +198,7 @@ import Control.Arrow.Machine.Utils
 --         y <- accum 0 -< (+) <$> x
 --         returnA -< y <$ x
 --   in
---     run f [1, 2, 3]
+--     run f [1,2,3]
 -- :}
 -- [1,3,6]
 --
