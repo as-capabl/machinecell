@@ -372,31 +372,42 @@ instance
             go f fr
     {-# INLINE arr #-}
 
+    {-
     first pa0 = evolve $ Evolution $ F.F $ \pr0 fr0 ->
         let
             fr paStep = fr0 $ EvoF (first $ suspend paStep) $ \(i, d) ->
                 case prepare paStep i
                   of
-                    Aw fnext -> Aw (fnext . fst)
+                    Aw fnext -> Aw (fnext . fst) -- Don't ignore snd!
                     Yd x next -> Yd (x, d) next
                     M mnext -> M mnext
           in
             F.runF (runEvolution $ finishWith pa0) pr0 fr
     {-# INLINE first #-}
+    -}
 
     {-
     second pa = undefined
     {-# INLINE second #-}            
     -}
 
-    {-
-    pa0 *** pb = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+    p0 *** pa0 = evolve $ Evolution $ F.F $ \pr0 fr0 ->
         let
-            fr pbStep pa = undefined
+            pr x _ = pr0 x
+            fr paStep p = fr0 $ EvoF (suspend (unFree p) *** suspend paStep) $ \(sus, susA) ->
+                case (prepare (unFree p) sus, prepare paStep susA)
+                  of
+                    (_, M mnext) -> M $ do { next <- mnext; return $ next p }
+                    (M mp', _) -> M $ do { p' <- mp'; return $ fr paStep p' }
+                    (Yd y p', Yd ya next) -> Yd (y, ya) $ next p'
+                    (_, Yd ya next) -> Yd (suspend (unFree p) sus, ya) $ next p
+                    (Yd y p', _) -> Yd (y, suspend paStep susA) $ fr paStep p'
+                    (Aw fp', Aw fnext) -> Aw (\(x, xa) -> fnext xa (fp' x)) -- Don't ignore snd!
+            unFree (Pure v) = absurd v
+            unFree (Free x) = x
           in
-            F.runF (runEvolution $ finishWith pb) absurd fr pa0
-    {-# INLINE (***) #-}
-    -}    
+            F.runF (runEvolution $ finishWith pa0) pr fr (runProcessT p0)
+    {-# INLINE (***) #-} 
 
 -- rules
 {- RULES

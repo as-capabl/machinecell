@@ -9,6 +9,7 @@ instance
     Monad m => ArrowChoice (ProcessT m)
   where
     (|||) = undefined
+    (+++) = undefined
 
 instance
     Monad m => ArrowLoop (ProcessT m)
