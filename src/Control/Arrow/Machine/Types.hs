@@ -9,6 +9,8 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -42,7 +44,7 @@ module
         --
         -- Coroutines can be encoded to machines by `constructT` or so on and
         -- then put into `ProcessT` compositions.
-        PlanT(..),
+        PlanT,
         Plan,
 
         MonadAwait (..),
@@ -202,8 +204,8 @@ toFreeEvo evo = fst $ runState (FT.runFT (runReaderT (runEvolution evo) id) pr f
     fr next fx = return $ wrap $ fmap `flip` fx $ \x -> fst $ runState (next x) (arr fst)
 -}
 
-fuse :: Monad m => Evolution b c m r -> ProcessT m a b -> Evolution a c m r
-fuse q0 p0 = Evolution $ F $ \pr0 fr0 -> 
+composeEvo :: Monad m => Evolution b c m r -> ProcessT m a b -> Evolution a c m r
+composeEvo q0 p0 = Evolution $ F $ \pr0 fr0 -> 
     let
         pr x _ = pr0 x
         fr q p = fr0 $ EvoF (suspend q . suspend (unFree p)) $ \i ->
@@ -228,8 +230,8 @@ fuse q0 p0 = Evolution $ F $ \pr0 fr0 ->
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
 evolve = ProcessT . F.fromF . runEvolution
 
-finishWith :: Monad m => ProcessT m i o -> Evolution i o m Void
-finishWith = Evolution . F.toF . runProcessT
+finishWith :: Monad m => ProcessT m i o -> Evolution i o m a
+finishWith = fmap absurd . Evolution . F.toF . runProcessT
 
 {-
 idEvo :: Monad m => Evolution i i m Void
@@ -292,7 +294,7 @@ fit ::
     (forall p. m p -> m' p) ->
     ProcessT m b c -> ProcessT m' b c
 fit f pa =
-    arr Identity >>>
+    lmap Identity $
     fitW runIdentity (\ar (Identity x) -> f (ar x)) pa
 
 -- |Experimental: more general fit.
@@ -302,12 +304,20 @@ fitW :: (Monad m, Monad m', Functor w) =>
     (forall p. w p -> p) ->
     (forall p q. (p -> m q) -> w p -> m' q) -> 
     ProcessT m b c -> ProcessT m' (w b) c
-fitW extr f pa = undefined
+fitW extr f pa = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+    let fr pstep = fr0 $ EvoF (suspend pstep . extr) $ \i ->
+            case prepare pstep (extr i)
+              of
+                Aw fnext -> Aw $ \i2 -> fnext (extr i2)
+                Yd x next -> Yd x next
+                M mnext -> M (f (\_ -> mnext) $ i)
+      in
+        F.runF (runEvolution $ finishWith pa) pr0 fr
 
 instance
     Monad m => Profunctor (ProcessT m)
   where
-    dimap f g (ProcessT mx) = ProcessT $ undefined 
+    dimap f g (ProcessT mx) = ProcessT $ hdimap f g mx 
     {-# INLINE dimap #-}
 
 
@@ -337,17 +347,22 @@ instance
 instance
     Monad m => Cat.Category (ProcessT m)
   where
-    id = undefined
+    id = arr id
     {-# INLINE id #-}
 
-    g . f = undefined
+    g . f = evolve $ composeEvo (finishWith g) f
     {-# INLINE (.) #-}
 
 
 instance
     Monad m => Arrow (ProcessT m)
   where
-    arr = undefined
+    arr f0 = evolve $ Evolution $ F $ \_ fr -> go f0 fr
+      where
+        go f fr = 
+            fr $ EvoF f $ \_ -> Aw $ \x ->
+            fr $ EvoF f $ \_ -> Yd (f x) $
+            go f fr
     {-# INLINE arr #-}
 
     first pa = undefined
@@ -356,7 +371,11 @@ instance
     second pa = undefined
     {-# INLINE second #-}
 
-    (***) = undefined
+    pa0 *** pb = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+        let
+            fr pbStep pa = undefined
+          in
+            F.runF (runEvolution $ finishWith pb) absurd fr pa0
     {-# INLINE (***) #-}
 
 
@@ -621,25 +640,8 @@ instance
     liftIO ma = lift $ liftIO ma
 -}
 
-data
-    PlanF i o a
-  where
-    AwaitPF :: (i->a) -> a -> PlanF i o a
-    YieldPF :: o -> a -> PlanF i o a
-    StopPF :: PlanF i o a
 
-instance
-    Functor (PlanF i o)
-  where
-    fmap g (AwaitPF f ff) = AwaitPF (g . f) (g ff)
-    fmap g (YieldPF x r) = YieldPF x (g r)
-    fmap _ StopPF = StopPF
-
-
-newtype PlanT i o m a =
-    PlanT { freePlanT :: FT.FT (PlanF i o) m a }
-  deriving
-    (Functor, Applicative, Monad)
+type PlanT i o = Evolution (Event i) (Event o)
 
 type Plan i o a = forall m. Monad m => PlanT i o m a
 
@@ -648,12 +650,7 @@ type Plan i o a = forall m. Monad m => PlanT i o m a
     forall p. packProc (return p) = p
  -}
 
-instance
-    MonadTrans (PlanT i o)
-  where
-    lift mx = PlanT $ lift mx
-    {-# INLINE lift #-}
-
+ {-
 instance
     MonadReader r m => MonadReader r (PlanT i o m)
   where
@@ -673,7 +670,7 @@ instance
     get = lift get
     put x = lift $ put x
 
-instance
+    instance
     Monad m => Alternative (PlanT i o m)
   where
     empty = stop
@@ -684,12 +681,7 @@ instance
   where
     mzero = stop
     mplus = catchP
-
-instance
-    MonadIO m => MonadIO (PlanT i o m)
-  where
-    liftIO = lift . liftIO
-    {-# INLINE liftIO #-}
+-}
 
 class
     MonadAwait m a | m -> a
@@ -697,17 +689,17 @@ class
     await :: m a
 
 instance
-    Monad m => MonadAwait (PlanT i o m) i
-  where
-    {-# INLINE await #-}
-    await = PlanT $ F.wrap $ AwaitPF return (F.liftF StopPF)
-
-instance
     (Monad m, Occasional o) =>
     MonadAwait (Evolution (Event a) o m) a
   where
     {-# INLINE await #-}
-    await = undefined
+    await = Evolution $ F.F go
+      where
+        go pr fr = fr $ EvoF (const noEvent) $ \_ -> Aw $ \case
+            Event x -> pr x
+            NoEvent -> go pr fr
+            End -> F.runF (runEvolution $ finishWith stopped) pr fr
+
 
 class
     MonadYield m a | m -> a
@@ -715,16 +707,11 @@ class
     yield :: a -> m ()
 
 instance
-    Monad m => MonadYield (PlanT i o m) o
-  where
-    {-# INLINE yield #-}
-    yield x = PlanT $ F.liftF $ YieldPF x ()
-
-instance
     Monad m => MonadYield (Evolution i (Event a) m) a
   where
     {-# INLINE yield #-}
-    yield x = undefined
+    yield x =Evolution $ F.liftF $ EvoF (const noEvent) $ \_ -> Yd (Event x) ()
+          
 
 class
     MonadStop m
@@ -732,21 +719,26 @@ class
     stop :: m a
 
 instance
-    Monad m => MonadStop (PlanT i o m)
-  where
-    {-# INLINE stop #-}
-    stop = PlanT $ F.liftF StopPF
-
-instance
     (Monad m, Occasional o) =>
     MonadStop (Evolution i o m)
   where
     {-# INLINE stop #-}
-    stop = undefined
+    stop = finishWith stopped
 
-catchP:: Monad m =>
-    PlanT i o m a -> PlanT i o m a -> PlanT i o m a
-catchP = undefined
+
+catchP:: (Monad m, Occasional' o) =>
+    Evolution i o m a -> Evolution i o m a -> Evolution i o m a
+catchP p recover = Evolution $ F.F $ \pr0 fr0 ->
+    let fr pstep = fr0 $ EvoF (suspend pstep) $ \i ->
+            case prepare pstep i
+              of
+                Aw fnext -> Aw fnext
+                Yd (collapse -> End) _ ->
+                    M $ return $ F.runF (runEvolution recover) pr0 fr0
+                Yd x next -> Yd x next
+                M mnext -> M mnext
+      in
+        F.runF (runEvolution p) pr0 fr
 
 {-
 catchP (PlanT pl) next0 =
@@ -810,28 +802,28 @@ yieldProc y pa = ProcessT {
 stopped ::
     (Monad m, Occasional o) =>
     ProcessT m i o
-stopped = undefined
+stopped = arr $ const end
 
 {-# INLINE constructT #-}
 constructT ::
     (Monad m) =>
     PlanT i o m r ->
     ProcessT m (Event i) (Event o)
-constructT pl0 = undefined
+constructT = evolve . (>> stop)
 
 {-# INLINE realizePlan #-}
 realizePlan ::
     Monad m =>
     PlanT i o m a ->
     Evolution (Event i) (Event o) m a
+realizePlan = id
 
-realizePlan pl = undefined
 {-# INLINE repeatedlyT #-}
 repeatedlyT ::
     Monad m =>
     PlanT i o m r ->
     ProcessT m (Event i) (Event o)
-repeatedlyT pl0 = undefined
+repeatedlyT = evolve . forever
 
 
 -- for pure
@@ -853,6 +845,19 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 --
 -- Switches
 --
+switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
+switchAfter p0 = Evolution $ F $ \pr0 fr0 ->
+    let
+        fr p = fr0 $ EvoF (fst . suspend p) $ \i ->
+            case (prepare p i)
+              of
+                Yd (_, Event t) _ -> M (return $ pr0 t)
+                Yd (x, _) next -> Yd x next
+                Aw fnext -> Aw fnext
+                M mnext -> M mnext
+      in
+        F.runF (runEvolution $ finishWith p0) absurd fr
+
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 dSwitchAfter p0 = Evolution $ F $ \pr0 fr0 ->
@@ -935,11 +940,9 @@ rSwitch ::
     Monad m =>
     ProcessT m b c ->
     ProcessT m (b, Event (ProcessT m b c)) c
-rSwitch p = rSwitch' (p *** Cat.id) >>> arr fst
+rSwitch = evolve . go
   where
-    rSwitch' pid = kSwitch pid test $ \_ p' -> rSwitch'' (p' *** Cat.id)
-    rSwitch'' pid = dkSwitch pid test $ \s _ -> rSwitch' s
-    test = proc (_, (_, r)) -> returnA -< r
+    go p = switchAfter (p *** Cat.id) >>= go
 
 
 -- |Delayed version of `rSwitch`.
@@ -963,9 +966,9 @@ drSwitch ::
     Monad m => ProcessT m b c ->
     ProcessT m (b, Event (ProcessT m b c)) c
 
-drSwitch p =  drSwitch' (p *** Cat.id)
+drSwitch = evolve . go
   where
-    drSwitch' pid = dSwitch pid $ \p' -> drSwitch' (p' *** Cat.id)
+    go p = dSwitchAfter (p *** Cat.id) >>= go
 
 
 kSwitch ::
