@@ -364,7 +364,16 @@ instance
             go f fr
     {-# INLINE arr #-}
 
-    first pa = undefined
+    first pa0 = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+        let
+            fr paStep = fr0 $ EvoF (first $ suspend paStep) $ \(i, d) ->
+                case prepare paStep i
+                  of
+                    Aw fnext -> Aw (fnext . fst)
+                    Yd x next -> Yd (x, d) next
+                    M mnext -> M mnext
+          in
+            F.runF (runEvolution $ finishWith pa0) pr0 fr
     {-# INLINE first #-}
 
     {-
