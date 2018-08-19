@@ -1420,15 +1420,16 @@ runT ::
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
-runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF . Fd.toList
+runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF False . Fd.toList
   where
-    frF evoF = frV (prepare evoF NoEvent)
-    frV (Aw f) (x:xs) = f (Event x) xs
-    frV (Aw f) [] = f End []
-    frV (Yd (Event x) next) l = outpre x >> next l
-    frV (Yd NoEvent next) l = next l
-    frV (Yd End next) _ = next []
-    frV (M mnext) l = do { n <- mnext; n l } 
+    frF evoF b l = frV (prepare evoF NoEvent) b l
+    frV (Aw f) True _ = return ()
+    frV (Aw f) False (x:xs) = f (Event x) False xs
+    frV (Aw f) False [] = f End True []
+    frV (Yd (Event x) next) b l = outpre x >> next b l
+    frV (Yd NoEvent next) b l = next b l
+    frV (Yd End next) b _ = next b []
+    frV (M mnext) b l = do { next <- mnext; next b l } 
 {-
 runT outpre0 pa0 xs =
     runRM pa0 $

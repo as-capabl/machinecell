@@ -8,6 +8,7 @@ where
 
 import Prelude
 import Control.Arrow.Machine as P
+import Control.Arrow.Machine.AdditionalInstances
 import Control.Arrow
 import qualified Control.Category as Cat
 import Control.Applicative

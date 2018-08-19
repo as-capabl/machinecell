@@ -155,8 +155,11 @@ edge = evolve $ go Nothing
   where
     go prv =
       do
-        cur <- dSwitchAfter $ unsafeExhaust (return . judge prv)
-        go cur
+        cur <- dSwitchAfter $ unsafeExhaust (return . judge prv) >>> (Cat.id &&& Cat.id)
+        go $ Just cur
+    
+    judge prv x = if prv == Just x then Nothing else Just x
+
 
 -- $sources
 -- In addition to the main event stream privided by `run`,

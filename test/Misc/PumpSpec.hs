@@ -11,6 +11,7 @@ import Test.Hspec
 import Control.Category ((>>>))
 
 import Control.Arrow.Machine as P
+import Control.Arrow.Machine.AdditionalInstances
 import Control.Monad.Trans (liftIO)
 import qualified Control.Arrow.Machine.Misc.Pump as Pump
 
