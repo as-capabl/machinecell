@@ -151,15 +151,12 @@ dAccum !x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 edge ::
     (Monad m, Eq b) =>
     ProcessT m b (Event b)
-edge = proc x ->
-  do
-    rec
-        ev <- unsafeExhaust (return . judge) -< (prv, x)
-        prv <- dHold Nothing -< Just x <$ ev
-    returnA -< ev
+edge = evolve $ go Nothing
   where
-    judge (prv, x) = if prv == Just x then Nothing else Just x
-
+    go prv =
+      do
+        cur <- dSwitchAfter $ unsafeExhaust (return . judge prv)
+        go cur
 
 -- $sources
 -- In addition to the main event stream privided by `run`,

@@ -81,6 +81,14 @@ module
         stepRun,
         stepYield,
 
+        -- * Evolutions
+        switchAfter,
+        dSwitchAfter,
+        kSwitchAfter,
+        dkSwitchAfter,
+        gSwitchAfter,
+        dgSwitchAfter,
+
         -- * Primitive machines - switches
         -- | Switches inspired by the Yampa library.
         -- Signature is almost same, but collection requirement is  not only 'Functor',
@@ -883,6 +891,40 @@ dSwitchAfter p0 = Evolution $ F $ \pr0 fr0 ->
       in
         F.runF (runEvolution $ finishWith p0) absurd fr
 
+{-# INLINE kSwitchAfter #-}
+kSwitchAfter ::
+    Monad m =>
+    ProcessT m (i, o) (Event r) ->
+    ProcessT m i o ->
+    Evolution i o m (ProcessT m i o, r)
+kSwitchAfter test pf = undefined -- Evolution $ cont $ kSwitch pf test . curry
+
+{-# INLINE dkSwitchAfter #-}
+dkSwitchAfter ::
+    Monad m =>
+    ProcessT m (i, o) (Event r) ->
+    ProcessT m i o ->
+    Evolution i o m (ProcessT m i o, r)
+dkSwitchAfter test pf = undefined -- Evolution $ cont $ dkSwitch pf test . curry
+
+{-# INLINE gSwitchAfter #-}
+gSwitchAfter ::
+    Monad m =>
+    ProcessT m i (p, r) ->
+    ProcessT m (q, r) (o, Event t) ->
+    ProcessT m p q ->
+    Evolution i o m (ProcessT m p q, t)
+gSwitchAfter pre post pf = undefined -- Evolution $ cont $ gSwitch pre pf post . curry
+
+{-# INLINE dgSwitchAfter #-}
+dgSwitchAfter ::
+    Monad m =>
+    ProcessT m i (p, r) ->
+    ProcessT m (q, r) (o, Event t) ->
+    ProcessT m p q ->
+    Evolution i o m (ProcessT m p q, t)
+dgSwitchAfter pre post pf = undefined -- Evolution $ cont $ dgSwitch pre pf post . curry
+        
 -- |Run the 1st transducer at the beggining. Then switch to 2nd when Event t occurs.
 --
 -- >>> :{
@@ -1378,7 +1420,15 @@ runT ::
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
-runT = undefined
+runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF . Fd.toList
+  where
+    frF evoF = frV (prepare evoF NoEvent)
+    frV (Aw f) (x:xs) = f (Event x) xs
+    frV (Aw f) [] = f End []
+    frV (Yd (Event x) next) l = outpre x >> next l
+    frV (Yd NoEvent next) l = next l
+    frV (Yd End next) _ = next []
+    frV (M mnext) l = do { n <- mnext; n l } 
 {-
 runT outpre0 pa0 xs =
     runRM pa0 $
