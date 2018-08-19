@@ -269,13 +269,12 @@ instance
   where
     hdimap f g = Free.hoistFree $ hdimap f g
 
-{-
 instance
     Monad m =>
     HProfunctor (Evolution b c m) (Evolution a d m) a b c d
   where
-    hdimap f g = fromFreeEvo . hdimap f g . toFreeEvo
--}
+    hdimap f g = Evolution . hdimap f g . runEvolution
+
 
 hlmap :: HProfunctor p1 p2 a b c c => (a -> b) -> p1 r -> p2 r
 hlmap f = hdimap f id
@@ -317,7 +316,7 @@ fitW extr f pa = evolve $ Evolution $ F.F $ \pr0 fr0 ->
 instance
     Monad m => Profunctor (ProcessT m)
   where
-    dimap f g (ProcessT mx) = ProcessT $ hdimap f g mx 
+    dimap f g p = evolve $ hdimap f g $ finishWith p 
     {-# INLINE dimap #-}
 
 
@@ -368,16 +367,19 @@ instance
     first pa = undefined
     {-# INLINE first #-}
 
+    {-
     second pa = undefined
-    {-# INLINE second #-}
+    {-# INLINE second #-}            
+    -}
 
+    {-
     pa0 *** pb = evolve $ Evolution $ F.F $ \pr0 fr0 ->
         let
             fr pbStep pa = undefined
           in
             F.runF (runEvolution $ finishWith pb) absurd fr pa0
     {-# INLINE (***) #-}
-
+    -}    
 
 -- rules
 {- RULES
