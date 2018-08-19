@@ -356,7 +356,7 @@ instance
 instance
     Monad m => Arrow (ProcessT m)
   where
-    arr f0 = evolve $ Evolution $ F $ \_ fr -> go f0 fr
+    arr f0 = evolve $ Evolution $ F.F $ \_ fr -> go f0 fr
       where
         go f fr = 
             fr $ EvoF f $ \_ -> Aw $ \x ->
@@ -1226,15 +1226,27 @@ unsafeExhaust ::
     (Monad m, Fd.Foldable f) =>
     (b -> m (f c)) ->
     ProcessT m b (Event c)
-unsafeExhaust p =
+unsafeExhaust p = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+    let doCycle = fr0 $ EvoF (const NoEvent) $ \i ->
+            M (Fd.foldr yd nextCycle <$> p i)
+        yd x next = fr0 $ EvoF (const NoEvent) $ \_ ->
+            Yd (Event x) next
+        nextCycle = fr0 $ EvoF (const NoEvent) $ \_ ->
+            Aw (\_ -> doCycle)
+      in
+        doCycle
+
+{-
     go >>> fork
   where
-    go = undefined
+    go = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+        fr0 $ EvoF (const NoEvent) $ \i ->
+            
 
     fork = undefined -- repeatedly $ await >>= Fd.mapM_ yield
 
-    nullFd = undefined -- getAll . Fd.foldMap (\_ -> All False)
-
+    nullFd = getAll . Fd.foldMap (\_ -> All False)
+-}
 
 --
 -- Running
