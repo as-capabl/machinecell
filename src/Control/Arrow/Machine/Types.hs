@@ -155,6 +155,7 @@ data Phase = Feed | Sweep | Suspend deriving (Eq, Show)
     
 data EvoV i o m a =
     Aw (i -> a) |
+    UnGet i a |
     Yd o a |
     M (m a)
   deriving Functor
@@ -215,22 +216,25 @@ toFreeEvo evo = fst $ runState (FT.runFT (runReaderT (runEvolution evo) id) pr f
 composeEvo :: Monad m => Evolution b c m r -> ProcessT m a b -> Evolution a c m r
 composeEvo q0 p0 = Evolution $ F $ \pr0 fr0 -> 
     let
-        pr x _ = pr0 x
-        fr q p = fr0 $ EvoF (suspend q . suspend (unFree p)) $ \i ->
+        pr x _ _ = pr0 x
+        fr q ug p = fr0 $ EvoF (suspend q . suspend (unFree p)) $ \i ->
             let
                 susX = suspend (unFree p) i
                 vQ = prepare q susX
                 vP = prepare (unFree p) i
               in
-                case (vP, vQ)
+                case (vP, ug, vQ)
                   of
-                    (_, M mq') -> M (($p) <$> mq')
-                    (_, Yd o q') -> Yd o $ q' p
-                    (M mp', Aw _) -> M (fr q <$> mp')
-                    (Yd z p', Aw g) -> M (return $ g z p')
-                    (Aw f, Aw _) -> Aw $ fr q . f 
+                    (_, _, M mq') -> M (mq' >>= \q' -> return $ q' ug p)
+                    (_, _, UnGet x q') -> M (return $ q' (Just x) p)
+                    (_, _, Yd o q') -> Yd o $ q' Nothing p
+                    (_, Just z, Aw g) -> M (return $ g z Nothing p)
+                    (M mp', Nothing, Aw _) -> M (fr q Nothing <$> mp')
+                    (UnGet x p', Nothing, Aw _) -> UnGet x $ fr q Nothing p'
+                    (Yd z p', Nothing, Aw g) -> M (return $ g z Nothing p')
+                    (Aw f, Nothing, Aw _) -> Aw $ fr q Nothing . f 
       in
-        F.runF (runEvolution q0) pr fr (runProcessT p0)
+        F.runF (runEvolution q0) pr fr Nothing (runProcessT p0)
   where
     unFree (Pure v) = absurd v
     unFree (Free x) = x
@@ -316,6 +320,7 @@ fitW extr f pa = evolve $ Evolution $ F.F $ \pr0 fr0 ->
             case prepare pstep (extr i)
               of
                 Aw fnext -> Aw $ \i2 -> fnext (extr i2)
+                UnGet x next -> UnGet (x <$ i) next
                 Yd x next -> Yd x next
                 M mnext -> M (f (\_ -> mnext) $ i)
       in
@@ -402,6 +407,9 @@ instance
                     (Yd y p', Yd ya next) -> Yd (y, ya) $ next p'
                     (_, Yd ya next) -> Yd (suspend (unFree p) sus, ya) $ next p
                     (Yd y p', _) -> Yd (y, suspend paStep susA) $ fr paStep p'
+                    (UnGet x p', UnGet xa next) -> UnGet (x, xa) $ next p'
+                    (_, UnGet xa next) -> UnGet (sus, xa) $ next p
+                    (UnGet x p', _) -> UnGet (x, susA) $ fr paStep p'
                     (Aw fp', Aw fnext) -> Aw (\(x, xa) -> fnext xa (fp' x))
             unFree (Pure v) = absurd v
             unFree (Free x) = x
@@ -766,6 +774,7 @@ catchP p recover = Evolution $ F.F $ \pr0 fr0 ->
                 Yd (collapse -> End) _ ->
                     M $ return $ F.runF (runEvolution recover) pr0 fr0
                 Yd x next -> Yd x next
+                UnGet x next -> UnGet x next
                 M mnext -> M mnext
       in
         F.runF (runEvolution p) pr0 fr
@@ -878,15 +887,20 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 switchAfter p0 = Evolution $ F $ \pr0 fr0 ->
     let
-        fr p = fr0 $ EvoF (fst . suspend p) $ \i ->
+        pr v _ = absurd v
+        fr p ug = fr0 $ EvoF (fst . suspend p) $ \i ->
             case prepare p i
               of
-                Yd (_, Event t) _ -> M (return $ pr0 t)
-                Yd (x, _) next -> Yd x next
-                Aw fnext -> Aw fnext
-                M mnext -> M mnext
+                Yd (_, Event t) _ -> case ug
+                  of
+                    Just x -> UnGet x $ pr0 t
+                    Nothing -> M (return $ pr0 t)
+                Yd (x, _) next -> Yd x $ next Nothing
+                UnGet x next -> UnGet x $ next ug 
+                Aw fnext -> Aw $ \x -> fnext x (Just x)
+                M mnext -> M $ do { next <- mnext; return $ next ug }
       in
-        F.runF (runEvolution $ finishWith p0) absurd fr
+        F.runF (runEvolution $ finishWith p0) pr fr Nothing
 
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
@@ -897,6 +911,7 @@ dSwitchAfter p0 = Evolution $ F $ \pr0 fr0 ->
               of
                 Yd (x, Event t) _ -> Yd x (pr0 t)
                 Yd (x, _) next -> Yd x next
+                UnGet x next -> UnGet x next
                 Aw fnext -> Aw fnext
                 M mnext -> M mnext
       in
@@ -1431,17 +1446,20 @@ runT ::
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
-runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF False . Fd.toList
+runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF Nothing False . Fd.toList
   where
-    frF evoF b l = frV (prepare evoF NoEvent) b l
+    frF evoF ug b l = frV (prepare evoF NoEvent) ug b l
 
-    frV (Aw f) False (x:xs) = f (Event x) False xs
-    frV (Aw f) False [] = f End True []
-    frV (Aw _) True _ = return ()
-    frV (Yd (Event x) next) b l = outpre x >> next b l
-    frV (Yd NoEvent next) b l = next b l
-    frV (Yd End next) b _ = next b []
-    frV (M mnext) b l = do { next <- mnext; next b l } 
+    frV (Yd (Event x) next) _ b l = outpre x >> next Nothing b l
+    frV (Yd NoEvent next) _ b l = next Nothing b l
+    frV (Yd End next) _ b _ = next Nothing b []
+    frV (UnGet evx next) _ b l = next (Just evx) b l
+    frV (M mnext) ug b l = do { next <- mnext; next ug b l } 
+    frV (Aw f) (Just evx) b l = f evx Nothing b l 
+    frV (Aw f) Nothing False (x:xs) = f (Event x) Nothing False xs
+    frV (Aw f) Nothing False [] = f End Nothing True []
+    frV (Aw _) Nothing True _ = return ()
+
 {-
 runT outpre0 pa0 xs =
     runRM pa0 $
