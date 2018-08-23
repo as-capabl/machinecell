@@ -251,6 +251,7 @@ idEvo = Evolution $ ReaderT $ \_ -> StateT $ \(ProcessT mx) ->
     fmap (\v -> (v, absurd v)) $ toF mx
 -}
 
+{-
 class
     HProfunctor p1 p2 a b c d | p1 -> b, p1 -> c, p2 -> a, p2 -> d, p1 a d -> p2, p2 b c -> p1
   where
@@ -293,6 +294,20 @@ hlmap f = hdimap f id
 
 hrmap :: HProfunctor p1 p2 a a b c => (b -> c) -> p1 r -> p2 r
 hrmap g = hdimap id g
+-}
+
+dimapEvo :: Monad m => (a -> b) -> (c -> d) -> Evolution b c m Void -> Evolution a d m Void
+dimapEvo f g evo = Evolution $ F.F $ \pr0 fr0 ->
+    let
+        pr x _ = pr0 x
+        fr evoF ug = fr0 $ EvoF (dimap f g $ suspend evoF) (\i -> frV (prepare evoF (f i)) ug)
+        frV (Aw p) Nothing = Aw $ \i -> p (f i) Nothing
+        frV (Aw p) (Just x) = M $ return $ p x Nothing
+        frV (UnGet x next) _ = M $ return $ next (Just x)
+        frV (Yd y next) _ = Yd (g y) $ next Nothing
+        frV (M mnext) ug = M $ do { next <- mnext; return $ next ug }
+      in
+        F.runF (runEvolution evo) pr fr Nothing
 
 -- | Isomorphic to ProcessT when 'a' is ArrowApply.
 type ProcessA a = ProcessT (ArrowMonad a)
@@ -329,7 +344,7 @@ fitW extr f pa = evolve $ Evolution $ F.F $ \pr0 fr0 ->
 instance
     Monad m => Profunctor (ProcessT m)
   where
-    dimap f g p = evolve $ hdimap f g $ finishWith p 
+    dimap f g p = evolve $ dimapEvo f g $ finishWith p 
     {-# INLINE dimap #-}
 
 
