@@ -33,6 +33,7 @@ flag arrow-tr
 library
   exposed-modules:
         Control.Arrow.Machine,
+        Control.Arrow.Machine.Internal.Event,
         Control.Arrow.Machine.Types,
         Control.Arrow.Machine.Utils,
         Control.Arrow.Machine.ArrowUtil,
