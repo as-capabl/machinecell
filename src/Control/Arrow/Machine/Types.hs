@@ -776,7 +776,7 @@ kSwitchAfter ::
     ProcessT m (i, o) (Event r) ->
     ProcessT m i o ->
     Evolution i o m (ProcessT m i o, r)
-kSwitchAfter test pf = undefined -- Evolution $ cont $ kSwitch pf test . curry
+kSwitchAfter test = g1SwitchAfter id (arr snd &&& test)
 
 {-# INLINE dkSwitchAfter #-}
 dkSwitchAfter ::
@@ -784,7 +784,25 @@ dkSwitchAfter ::
     ProcessT m (i, o) (Event r) ->
     ProcessT m i o ->
     Evolution i o m (ProcessT m i o, r)
-dkSwitchAfter test pf = undefined -- Evolution $ cont $ dkSwitch pf test . curry
+dkSwitchAfter test = dg1SwitchAfter id (arr snd &&& test)
+
+{-# INLINE g1SwitchAfter #-}
+g1SwitchAfter ::
+    Monad m =>
+    (i -> p) ->
+    ProcessT m (i, q) (o, Event t) ->
+    ProcessT m p q ->
+    Evolution i o m (ProcessT m p q, t)
+g1SwitchAfter pre post pf = undefined
+
+{-# INLINE dg1SwitchAfter #-}
+dg1SwitchAfter ::
+    Monad m =>
+    (i -> p) ->
+    ProcessT m (i, q) (o, Event t) ->
+    ProcessT m p q ->
+    Evolution i o m (ProcessT m p q, t)
+dg1SwitchAfter pre post pf = undefined
 
 {-# INLINE gSwitchAfter #-}
 gSwitchAfter ::
@@ -793,7 +811,14 @@ gSwitchAfter ::
     ProcessT m (q, r) (o, Event t) ->
     ProcessT m p q ->
     Evolution i o m (ProcessT m p q, t)
-gSwitchAfter pre post pf = undefined -- Evolution $ cont $ gSwitch pre pf post . curry
+gSwitchAfter pre post pf = switchAfter $ pre >>> evolve pfpost
+  where
+    pfpost =
+      do
+        (pf', (lastval, ret)) <- g1SwitchAfter fst post' pf
+        finishWith $ pure lastval &&& (stopped >>> construct (yield (pf', ret)))
+    
+    post' = undefined
 
 {-# INLINE dgSwitchAfter #-}
 dgSwitchAfter ::
@@ -919,46 +944,6 @@ dkSwitch ::
     (ProcessT m b c -> t -> ProcessT m b c) ->
     ProcessT m b c
 dkSwitch sf test = undefined
-
-{-
-ggSwitch ::
-    (Monad m, Stepper m b (c, Event t) sWhole) =>
-    (sWhole -> s) ->
-    sWhole ->
-    (s -> t -> ProcessT m b c) ->
-    ProcessT m b c
-ggSwitch picker whole k = makePA
-    (\x ->
-      do
-        let
-        (hyevt, whole') <- step whole x
-        let hy = fst <$> hyevt
-            hevt = snd <$> hyevt
-        case (helperToMaybe hevt)
-          of
-            Just (Event t) -> step (k (picker whole') t) x
-            _ -> return (hy, ggSwitch picker whole' k))
-    (arr fst . suspend whole)
-
-dggSwitch ::
-    (Monad m, Stepper m b (c, Event t) sWhole) =>
-    (sWhole -> s) ->
-    sWhole ->
-    (s -> t -> ProcessT m b c) ->
-    ProcessT m b c
-dggSwitch picker whole k = makePA
-    (\x ->
-      do
-        let
-        (hyevt, whole') <- step whole x
-        let hy = fst <$> hyevt
-            hevt = snd <$> hyevt
-        case (helperToMaybe hevt)
-          of
-            Just (Event t) -> return (hy, k (picker whole') t)
-            _ -> return (hy, dggSwitch picker whole' k))
-    (arr fst . suspend whole)
--}
 
 gSwitch ::
     Monad m =>
@@ -1157,141 +1142,6 @@ unsafeExhaust p = evolve $ Evolution $ F.F $ \pr0 fr0 ->
       in
         doCycle
 
-{-
-    go >>> fork
-  where
-    go = evolve $ Evolution $ F.F $ \pr0 fr0 ->
-        fr0 $ EvoF (const NoEvent) $ \i ->
-            
-
-    fork = undefined -- repeatedly $ await >>= Fd.mapM_ yield
-
-    nullFd = getAll . Fd.foldMap (\_ -> All False)
--}
-
---
--- Running
---
-{-
---
--- Running Monad (To be exported)
---
-data RunInfo i o m = RunInfo {
-    freezeRI :: !(ProcessT m i o),
-    getInputRI :: !i,
-    getPaddingRI :: !i,
-    getPhaseRI :: !Phase
-  }
-
-type RM i o m = StateT (RunInfo i o m) m
-
-runRM ::
-    Monad m' =>
-    ProcessT m (Event i) o ->
-    StateT (RunInfo (Event i) o m) m' x ->
-    m' x
-runRM pa mx =
-    evalStateT mx $
-        RunInfo {
-            freezeRI = pa,
-            getInputRI = NoEvent,
-            getPaddingRI = NoEvent,
-            getPhaseRI = Sweep
-          }
-
-
-
-feed_ ::
-    (Monad m, MonadState (RunInfo i o m') m) =>
-    i -> i -> m Bool
-feed_ input padding =
-  do
-    ph <- gets getPhaseRI
-    if ph == Suspend
-        then
-          do
-            ri <- get
-            put $ ri {
-                getInputRI = input,
-                getPaddingRI = padding,
-                getPhaseRI = Feed
-              }
-            return True
-        else
-            return False
-
-feedR ::
-    (Monad m, MonadState (RunInfo (Event i) o m') m) =>
-    i -> m Bool
-feedR x = feed_ (Event x) NoEvent
-
-
-freeze ::
-    Monad m =>
-    RM i o m (ProcessT m i o)
-freeze = gets freezeRI
-
-sweepR ::
-    Monad m =>
-    RM i o m o
-sweepR =
-  do
-    pa <- freeze
-    ph <- gets getPhaseRI
-    ri <- get
-    case ph of
-      Feed ->
-        do
-            x <- gets getInputRI
-            (y, pa') <- lift $ feed pa x
-            put $ ri {
-                freezeRI = pa',
-                getPhaseRI = Sweep
-              }
-            return y
-      Sweep ->
-        do
-            x <- gets getPaddingRI
-            (my, pa') <- lift $ sweep pa x
-            put $ ri {
-                freezeRI = pa',
-                getPhaseRI = if isJust my then Sweep else Suspend
-              }
-            return $ fromMaybe (suspend pa x) my
-      Suspend ->
-        do
-            x <- gets getPaddingRI
-            return $ suspend pa x
-
-
-sweepAll ::
-    (Monad m, Monad m') =>
-    (forall p. RM i (Event o) m p -> m' p) ->
-    (o -> m' ()) ->
-    ContT Bool m' ()
-sweepAll lft outpre =
-    callCC $ \sus -> forever $ cond sus >> body
-  where
-    cond sus =
-      do
-        ph <- lift $ lft $ gets getPhaseRI
-        if ph == Suspend then sus () else return ()
-    body =
-      do
-        evx <- lift $ lft $ sweepR
-        case evx
-          of
-            Event x ->
-              do
-                lift $ outpre x
-            NoEvent ->
-                return ()
-            End ->
-                breakCont False
-
-breakCont :: Monad m => r -> ContT r m a
-breakCont = ContT . const . return
--}
 
 -- | Run a machine.
 runT ::
@@ -1313,32 +1163,6 @@ runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF Nothing Fals
     frV (Aw f) Nothing False [] = f End Nothing True []
     frV (Aw _) Nothing True _ = return ()
 
-{-
-runT outpre0 pa0 xs =
-    runRM pa0 $
-      do
-        _ <- evalContT $
-          do
-            -- Sweep initial events.
-            sweepAll id outpre
-
-            -- Feed values
-            Fd.mapM_ feedSweep xs
-
-            return True
-
-        -- Terminate.
-        _ <- feed_ End End
-        _ <- evalContT $ sweepAll id outpre >> return True
-        return ()
-  where
-    feedSweep x =
-      do
-        _ <- lift $ feedR x
-        sweepAll id outpre
-
-    outpre = lift . outpre0
--}
 
 type Builder b = FT.F ((,) b)
 
@@ -1368,13 +1192,6 @@ run_ ::
     a (f b) ()
 run_ pa = proc l -> case runT_ pa l of {ArrowMonad f -> f} -<< ()
 
-{-
-lftRM :: (Monad m, Monad m') =>
-    (forall p. m p -> m' p) ->
-    RM i o m a ->
-    StateT (RunInfo i o m) m' a
-lftRM lft' st = StateT $ \s -> lft' $ runStateT st s
--}
 
 -- | Execute until an input consumed and the machine suspends.
 --
@@ -1396,32 +1213,24 @@ stepRun ::
     a -- ^ The argument to the machine.
       ->
     m' (ProcessT m (Event a) (Event b))
-stepRun _ _ _ _ = undefined
-{-
-stepRun lft yd stp pa0 x =
-  do
-    pa <- runRM pa0 $
-      do
-        csmd <- evalContT $
-          do
-            sweepAll (lftRM lft) (lift . yd)
-            return True
-        if csmd
-          then do
-            ct <- evalContT $
-              do
-                _ <- lift $ feedR x
-                sweepAll (lftRM lft) (lift . yd)
-                return True
-            if ct
-              then return ()
-              else lift $ stp $ Nothing
-          else
-            lift $ stp $ Just x
-        pa <- lftRM lft freeze
-        return pa
-    return pa
--}
+stepRun lft yd stp pa0 x = go (runProcessT pa0) (Just x) Nothing
+  where
+    go pa mx ug = case prepare (unFree pa) noEvent
+      of
+        Aw f -> case (mx, ug)
+          of
+            (_, Just i) -> go (f i) mx Nothing
+            (Just i, Nothing) -> go (f $ Event i) Nothing Nothing
+            (Nothing, Nothing) -> return $ ProcessT pa
+        UnGet xug pa' -> go pa' mx (Just xug)
+        Yd (Event y) pa' -> yd y >> go pa' mx ug
+        Yd NoEvent pa' -> go pa' mx ug
+        Yd End pa' -> lft (runT_ (ProcessT pa') []) >> stp mx >> return stopped
+        M mpa' -> do { pa' <- lft mpa'; go pa' mx ug }
+
+    
+    unFree (Pure v) = absurd v
+    unFree (Free evoF) = evoF
 
 -- | Execute until an output produced.
 --
@@ -1441,30 +1250,20 @@ stepYield ::
     ProcessT m (Event a) (Event b) -- ^ The machine to run.
       ->
     m' (Maybe b, ProcessT m (Event a) (Event b))
-stepYield _ _ _ _ = undefined
-{-
-stepYield lft aw stp pa0 = runRM pa0 $
-  do
-    r <- go False
-    pa <- lftRM lft freeze
-    return (r, pa)
-
+stepYield lft aw stp pa0 =  go (runProcessT pa0) False Nothing
   where
-    go csmd =
-        lftRM lft sweepR >>= handleEv csmd
-
-    handleEv _ (Event y) =
-        return $ Just y
-
-    handleEv True NoEvent =
-        return Nothing
-
-    handleEv False NoEvent =
-      do
-        x <- lift $ aw
-        _ <- lftRM lft $ feedR x
-        go True
-
-    handleEv _ End =
-        lift stp >> return Nothing
--}
+    go pa done ug = case prepare (unFree pa) noEvent
+        of
+        Aw f -> case (done, ug)
+          of 
+            (_, Just i) -> go (f i) done Nothing
+            (False, Nothing) -> aw >>= \i -> go (f $ Event i) True Nothing
+            (True, Nothing) -> return (Nothing, ProcessT pa)
+        UnGet xug pa' -> go pa' done (Just xug)
+        Yd (Event y) pa' -> return (Just y, ProcessT pa')
+        Yd NoEvent pa' -> go pa' done ug
+        Yd End pa' -> lft (runT_ (ProcessT pa') []) >> stp >> return (Nothing, stopped)
+        M mpa' -> do { pa' <- lft mpa'; go pa' done ug }
+    
+    unFree (Pure v) = absurd v
+    unFree (Free evoF) = evoF
