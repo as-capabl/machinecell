@@ -592,7 +592,7 @@ instance
     Monad m => MonadYield (Evolution i (Event a) m) a
   where
     {-# INLINE yield #-}
-    yield x =Evolution $ F.liftF $ EvoF (const noEvent) $ \_ -> Yd (Event x) ()
+    yield x = Evolution $ F.liftF $ EvoF (const noEvent) $ \_ -> Yd (Event x) ()
           
 
 class
@@ -611,17 +611,21 @@ instance
 catchP:: (Monad m, Occasional' o) =>
     Evolution i o m a -> Evolution i o m a -> Evolution i o m a
 catchP p recover = Evolution $ F.F $ \pr0 fr0 ->
-    let fr pstep = fr0 $ EvoF (suspend pstep) $ \i ->
+    let 
+        pr x _ = pr0 x
+        fr pstep lastval = fr0 $ EvoF (suspend pstep) $ \i ->
             case prepare pstep i
               of
-                Aw fnext -> Aw fnext
+                Aw fnext -> Aw $ \x -> fnext x (Just x)
                 Yd (collapse -> End) _ ->
-                    M $ return $ F.runF (runEvolution recover) pr0 fr0
-                Yd x next -> Yd x next
-                UnGet x next -> UnGet x next
-                M mnext -> M mnext
+                    goRecover lastval $ F.runF (runEvolution recover) pr0 fr0
+                Yd x next -> Yd x $ next Nothing
+                UnGet x next -> UnGet x $ next Nothing
+                M mnext -> M $ do { next <- mnext; return $ next lastval }
+        goRecover Nothing = M . return
+        goRecover (Just x) = UnGet x
       in
-        F.runF (runEvolution p) pr0 fr
+        F.runF (runEvolution p) pr fr Nothing
 
 {-
 catchP (PlanT pl) next0 =
@@ -685,7 +689,12 @@ yieldProc y pa = ProcessT {
 stopped ::
     (Monad m, Occasional o) =>
     ProcessT m i o
-stopped = arr $ const end
+stopped = evolve $ Evolution $ F.F $ \_ fr -> go fr
+      where
+        go fr =
+            fr $ EvoF (const end) $ \_ -> Yd end $ 
+            fr $ EvoF (const end) $ \_ -> Aw $ \_ ->
+            go fr
 
 {-# INLINE constructT #-}
 constructT ::
@@ -1294,10 +1303,10 @@ runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF Nothing Fals
   where
     frF evoF ug b l = frV (prepare evoF NoEvent) ug b l
 
-    frV (Yd (Event x) next) _ b l = outpre x >> next Nothing b l
+    frV (Yd (Event x) next) _ b l = outpre x >> next Nothing False l
     frV (Yd NoEvent next) _ b l = next Nothing b l
     frV (Yd End next) _ b _ = next Nothing b []
-    frV (UnGet evx next) _ b l = next (Just evx) b l
+    frV (UnGet evx next) _ b l = next (Just evx) False l
     frV (M mnext) ug b l = do { next <- mnext; next ug b l } 
     frV (Aw f) (Just evx) b l = f evx Nothing b l 
     frV (Aw f) Nothing False (x:xs) = f (Event x) Nothing False xs
