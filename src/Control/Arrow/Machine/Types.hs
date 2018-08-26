@@ -793,7 +793,31 @@ g1SwitchAfter ::
     ProcessT m (i, q) (o, Event t) ->
     ProcessT m p q ->
     Evolution i o m (ProcessT m p q, t)
-g1SwitchAfter pre post pf = undefined
+g1SwitchAfter pre post pf = Evolution $ F $ \pr0 fr0 -> 
+    let
+        pr x _ _ _ = pr0 x
+        fr q lastval ug p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unFree p) . pre)) $ \i ->
+            let
+                susX = suspend (unFree p) $ pre i
+                vQ = prepare q (i, susX)
+                vP = prepare (unFree p) $ pre i
+              in
+                case (vP, ug, vQ)
+                  of
+                    (_, _, M mq') -> M (mq' >>= \q' -> return $ q' lastval ug p)
+                    (_, _, UnGet x q') -> M . return $ q' lastval (Just x) p
+                    (_, _, Yd (o, Event t) q') -> undefined
+                    (_, _, Yd (o, _) q') -> Yd o $ q' Nothing Nothing p
+                    (_, Just z, Aw g) -> M . return $ g z lastval Nothing p
+                    (M mp', Nothing, Aw _) -> M (fr q lastval Nothing <$> mp')
+                    (UnGet x p', Nothing, Aw _) -> UnGet undefined $ fr q lastval Nothing p'
+                    (Yd z p', Nothing, Aw g) -> M . return $ g (maybe i id lastval, z) lastval Nothing p'
+                    (Aw f, Nothing, Aw _) -> Aw $ (\i2 -> fr q (Just i2) Nothing (f $ pre i2)) 
+      in
+        F.runF (runEvolution $ finishWith post) pr fr Nothing Nothing (runProcessT pf)
+  where
+    unFree (Pure v) = absurd v
+    unFree (Free x) = x
 
 {-# INLINE dg1SwitchAfter #-}
 dg1SwitchAfter ::
