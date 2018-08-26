@@ -795,29 +795,39 @@ g1SwitchAfter ::
     Evolution i o m (ProcessT m p q, t)
 g1SwitchAfter pre post pf = Evolution $ F $ \pr0 fr0 -> 
     let
-        pr x _ _ _ = pr0 x
-        fr q lastval ug p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unFree p) . pre)) $ \i ->
+        pr x _ _ _ _ = absurd x
+        fr q lastval ugp ugq p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unFree p) . pre)) $ \i ->
             let
                 susX = suspend (unFree p) $ pre i
                 vQ = prepare q (i, susX)
                 vP = prepare (unFree p) $ pre i
               in
-                case (vP, ug, vQ)
+                case (vP, ugq, vQ)
                   of
-                    (_, _, M mq') -> M (mq' >>= \q' -> return $ q' lastval ug p)
-                    (_, _, UnGet x q') -> M . return $ q' lastval (Just x) p
-                    (_, _, Yd (o, Event t) q') -> undefined
-                    (_, _, Yd (o, _) q') -> Yd o $ q' Nothing Nothing p
-                    (_, Just z, Aw g) -> M . return $ g z lastval Nothing p
-                    (M mp', Nothing, Aw _) -> M (fr q lastval Nothing <$> mp')
-                    (UnGet x p', Nothing, Aw _) -> UnGet undefined $ fr q lastval Nothing p'
-                    (Yd z p', Nothing, Aw g) -> M . return $ g (maybe i id lastval, z) lastval Nothing p'
-                    (Aw f, Nothing, Aw _) -> Aw $ (\i2 -> fr q (Just i2) Nothing (f $ pre i2)) 
+                    (_, _, M mq') -> M (mq' >>= \q' -> return $ q' lastval ugp ugq p)
+                    (_, _, UnGet x q') -> M . return $ q' lastval ugp (Just x) p
+                    (_, _, Yd (o, Event t) q') -> goRecover lastval $
+                        pr0 (ProcessT $ ungetNext ugp p, t)
+                    (_, _, Yd (o, _) q') -> Yd o $ q' Nothing ugp Nothing p
+                    (_, Just z, Aw g) -> M . return $ g z lastval ugp Nothing p
+                    (M mp', Nothing, Aw _) -> M (fr q lastval ugp Nothing <$> mp')
+                    (UnGet x p', Nothing, Aw _) -> M . return $ fr q lastval (Just x) Nothing p'
+                    (Yd z p', Nothing, Aw g) -> M . return $ g (maybe i id lastval, z) lastval Nothing Nothing p'
+                    (Aw f, Nothing, Aw _) -> case ugp
+                      of
+                        Just x -> M . return $ fr q lastval Nothing Nothing (f x)
+                        Nothing -> Aw $ (\i2 -> fr q (Just i2) ugp Nothing (f $ pre i2)) 
       in
-        F.runF (runEvolution $ finishWith post) pr fr Nothing Nothing (runProcessT pf)
+        F.runF (runEvolution $ finishWith post) pr fr Nothing Nothing Nothing (runProcessT pf)
   where
     unFree (Pure v) = absurd v
     unFree (Free x) = x
+
+    goRecover (Just x) = UnGet x
+    goRecover Nothing = M . return
+
+    ungetNext (Just x) p = Free $ EvoF (suspend (unFree p)) $ \_ -> UnGet x p
+    ungetNext Nothing p = p
 
 {-# INLINE dg1SwitchAfter #-}
 dg1SwitchAfter ::
@@ -826,7 +836,38 @@ dg1SwitchAfter ::
     ProcessT m (i, q) (o, Event t) ->
     ProcessT m p q ->
     Evolution i o m (ProcessT m p q, t)
-dg1SwitchAfter pre post pf = undefined
+dg1SwitchAfter pre post pf = Evolution $ F $ \pr0 fr0 -> 
+    let
+        pr x _ _ _ _ = absurd x
+        fr q lastval ugp ugq p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unFree p) . pre)) $ \i ->
+            let
+                susX = suspend (unFree p) $ pre i
+                vQ = prepare q (i, susX)
+                vP = prepare (unFree p) $ pre i
+              in
+                case (vP, ugq, vQ)
+                  of
+                    (_, _, M mq') -> M (mq' >>= \q' -> return $ q' lastval ugp ugq p)
+                    (_, _, UnGet x q') -> M . return $ q' lastval ugp (Just x) p
+                    (_, _, Yd (o, Event t) q') -> Yd o $
+                        pr0 (ProcessT $ ungetNext ugp p, t)
+                    (_, _, Yd (o, _) q') -> Yd o $ q' Nothing ugp Nothing p
+                    (_, Just z, Aw g) -> M . return $ g z lastval ugp Nothing p
+                    (M mp', Nothing, Aw _) -> M (fr q lastval ugp Nothing <$> mp')
+                    (UnGet x p', Nothing, Aw _) -> M . return $ fr q lastval (Just x) Nothing p'
+                    (Yd z p', Nothing, Aw g) -> M . return $ g (maybe i id lastval, z) lastval Nothing Nothing p'
+                    (Aw f, Nothing, Aw _) -> case ugp
+                      of
+                        Just x -> M . return $ fr q lastval Nothing Nothing (f x)
+                        Nothing -> Aw $ (\i2 -> fr q (Just i2) ugp Nothing (f $ pre i2)) 
+      in
+        F.runF (runEvolution $ finishWith post) pr fr Nothing Nothing Nothing (runProcessT pf)
+  where
+    unFree (Pure v) = absurd v
+    unFree (Free x) = x
+
+    ungetNext (Just x) p = Free $ EvoF (suspend (unFree p)) $ \_ -> UnGet x p
+    ungetNext Nothing p = p
 
 {-# INLINE gSwitchAfter #-}
 gSwitchAfter ::
@@ -958,7 +999,10 @@ kSwitch ::
     ProcessT m (b, c) (Event t) ->
     (ProcessT m b c -> t -> ProcessT m b c) ->
     ProcessT m b c
-kSwitch sf test = undefined
+kSwitch sf test next = evolve $
+  do
+    (sf', t) <- kSwitchAfter test sf
+    finishWith $ next sf' t
 
 
 dkSwitch ::
@@ -967,7 +1011,10 @@ dkSwitch ::
     ProcessT m (b, c) (Event t) ->
     (ProcessT m b c -> t -> ProcessT m b c) ->
     ProcessT m b c
-dkSwitch sf test = undefined
+dkSwitch sf test next = evolve $
+  do
+    (sf', t) <- dkSwitchAfter test sf
+    finishWith $ next sf' t
 
 gSwitch ::
     Monad m =>
