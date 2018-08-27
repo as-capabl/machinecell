@@ -8,10 +8,9 @@ import Control.Arrow.Machine.Types
 instance
     Monad m => ArrowChoice (ProcessT m)
   where
-    (|||) = undefined
-    (+++) = undefined
+    (+++) = chooseProcessT
 
 instance
     Monad m => ArrowLoop (ProcessT m)
   where
-    loop = undefined
+    loop = loopProcessT

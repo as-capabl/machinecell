@@ -116,6 +116,10 @@ module
         fit,
         fitW,
 
+        -- * For additional instances
+        chooseProcessT,
+        loopProcessT,
+
         -- * Primitive machines - unsafe
         unsafeExhaust,
       )
@@ -883,7 +887,10 @@ gSwitchAfter pre post pf = switchAfter $ pre >>> evolve pfpost
         (pf', (lastval, ret)) <- g1SwitchAfter fst post' pf
         finishWith $ pure lastval &&& (stopped >>> construct (yield (pf', ret)))
     
-    post' = undefined
+    post' = proc ((_, r), q) ->
+      do
+        (o, evt) <- post -< (q, r)
+        returnA -< ((o, noEvent), (o,) <$> evt)
 
 {-# INLINE dgSwitchAfter #-}
 dgSwitchAfter ::
@@ -892,8 +899,18 @@ dgSwitchAfter ::
     ProcessT m (q, r) (o, Event t) ->
     ProcessT m p q ->
     Evolution i o m (ProcessT m p q, t)
-dgSwitchAfter pre post pf = undefined -- Evolution $ cont $ dgSwitch pre pf post . curry
-        
+dgSwitchAfter pre post pf = switchAfter $ pre >>> evolve pfpost
+  where
+    pfpost =
+      do
+        (pf', (lastval, ret)) <- dg1SwitchAfter fst post' pf
+        finishWith $ pure lastval &&& (stopped >>> construct (yield (pf', ret)))
+  
+    post' = proc ((_, r), q) ->
+      do
+        (o, evt) <- post -< (q, r)
+        returnA -< ((o, noEvent), (o,) <$> evt)
+
 -- |Run the 1st transducer at the beggining. Then switch to 2nd when Event t occurs.
 --
 -- >>> :{
@@ -1023,7 +1040,10 @@ gSwitch ::
     ProcessT m (q, r) (c, Event t) ->
     (ProcessT m p q -> t -> ProcessT m b c) ->
     ProcessT m b c
-gSwitch pre sf post = undefined
+gSwitch pre sf post next = evolve $
+  do
+    (sf', t) <- gSwitchAfter pre post sf
+    finishWith $ next sf' t
 
 dgSwitch ::
     Monad m =>
@@ -1032,7 +1052,10 @@ dgSwitch ::
     ProcessT m (q, r) (c, Event t) ->
     (ProcessT m p q -> t -> ProcessT m b c) ->
     ProcessT m b c
-dgSwitch pre sf post = undefined
+dgSwitch pre sf post next = evolve $
+  do
+    (sf', t) <- dgSwitchAfter pre post sf
+    finishWith $ next sf' t
 
 broadcast ::
     Functor col =>
@@ -1203,7 +1226,7 @@ unsafeExhaust ::
     (Monad m, Fd.Foldable f) =>
     (b -> m (f c)) ->
     ProcessT m b (Event c)
-unsafeExhaust p = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+unsafeExhaust p = evolve $ Evolution $ F.F $ \_ fr0 ->
     let doCycle = fr0 $ EvoF (const NoEvent) $ \i ->
             M (Fd.foldr yd nextCycle <$> p i)
         yd x next = fr0 $ EvoF (const NoEvent) $ \_ ->
@@ -1224,10 +1247,10 @@ runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF Nothing Fals
   where
     frF evoF ug b l = frV (prepare evoF NoEvent) ug b l
 
-    frV (Yd (Event x) next) _ b l = outpre x >> next Nothing False l
+    frV (Yd (Event x) next) _ _ l = outpre x >> next Nothing False l
     frV (Yd NoEvent next) _ b l = next Nothing b l
     frV (Yd End next) _ b _ = next Nothing b []
-    frV (UnGet evx next) _ b l = next (Just evx) False l
+    frV (UnGet evx next) _ _ l = next (Just evx) False l
     frV (M mnext) ug b l = do { next <- mnext; next ug b l } 
     frV (Aw f) (Just evx) b l = f evx Nothing b l 
     frV (Aw f) Nothing False (x:xs) = f (Event x) Nothing False xs
@@ -1338,3 +1361,25 @@ stepYield lft aw stp pa0 =  go (runProcessT pa0) False Nothing
     
     unFree (Pure v) = absurd v
     unFree (Free evoF) = evoF
+
+chooseProcessT ::
+    Monad m =>
+    ProcessT m a1 b1 ->
+    ProcessT m a2 b2 ->
+    ProcessT m (Either a1 a2) (Either b1 b2)
+chooseProcessT p0 q0 = evolve $ Evolution $ F.F $ \_ fr0 ->
+    let
+        unwrapP (ProcessT (Pure v)) = absurd v
+        unwrapP (ProcessT (Free fx)) = ProcessT <$> fx
+        go (unwrapP -> p) (unwrapP -> q) = fr0 $ EvoF (suspend p +++ suspend q) $ \case
+            Left i -> undefined
+            Right i -> undefined 
+      in
+        go p0 q0
+
+
+loopProcessT ::
+    Monad m =>
+    ProcessT m (a, d) (b, d) ->
+    ProcessT m a b
+loopProcessT = undefined
