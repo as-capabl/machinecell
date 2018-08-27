@@ -1358,7 +1358,7 @@ stepYield lft aw stp pa0 =  go (runProcessT pa0) False Nothing
         Yd NoEvent pa' -> go pa' done ug
         Yd End pa' -> lft (runT_ (ProcessT pa') []) >> stp >> return (Nothing, stopped)
         M mpa' -> do { pa' <- lft mpa'; go pa' done ug }
-    
+
     unFree (Pure v) = absurd v
     unFree (Free evoF) = evoF
 
@@ -1371,9 +1371,11 @@ chooseProcessT p0 q0 = evolve $ Evolution $ F.F $ \_ fr0 ->
     let
         unwrapP (ProcessT (Pure v)) = absurd v
         unwrapP (ProcessT (Free fx)) = ProcessT <$> fx
+
         go (unwrapP -> p) (unwrapP -> q) = fr0 $ EvoF (suspend p +++ suspend q) $ \case
-            Left i -> undefined
-            Right i -> undefined 
+            Left i -> goV (\case {Left i2 -> i2; _ -> i}) Left p $ \p' -> go p' q
+            Right i -> undefined -- goV q $ \q' -> go p q'
+        goV awPre _ (Aw f) = Aw (f . awPre)
       in
         go p0 q0
 
@@ -1382,4 +1384,19 @@ loopProcessT ::
     Monad m =>
     ProcessT m (a, d) (b, d) ->
     ProcessT m a b
-loopProcessT = undefined
+loopProcessT p = undefined
+loopProcessT2 p = evolve $ Evolution $ F.F $ \_ fr0 ->
+    let
+        fr evoF = fr0 $ let
+            sus = loop $ (\(o, d) -> ((o, d), d)) . suspend evoF
+            susO = fst . sus
+            susD = snd . sus
+          in
+            EvoF susO $ \i -> case prepare evoF (i, susD i)
+              of
+                Aw fnext -> Aw $ \i' -> fnext (i', susD i) -- susD i' ?
+                UnGet (x, _) next -> UnGet x next
+                Yd (o, _) next -> Yd o next
+                M mnext -> M mnext
+      in
+        F.runF (runEvolution $ finishWith p) absurd fr
