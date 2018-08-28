@@ -153,23 +153,49 @@ import Control.Arrow.Machine.Internal.Event
     
 data EvoV i o m a =
     Aw (i -> a) |
-    UnGet i a |
     Yd o a |
     M (m a)
   deriving Functor
 
-data EvoF i o m a = EvoF
+data EvoV_UG i o m a =
+    EV (EvoV i o m a) |
+    UnGet i a
+  deriving Functor
+
+data EvoF' evoV i o m a = EvoF
   {
     suspend :: i -> o,
-    prepare :: i ->EvoV i o m a  
+    prepare :: i -> evoV i o (m :: * -> *) a  
   }
   deriving Functor
 
+type EvoF = EvoF' EvoV
+
+type EvoF_UG = EvoF' EvoV_UG
 
 newtype Evolution i o m r = Evolution 
   {
-    runEvolution :: F (EvoF i o m) r
+    runEvolution :: F (EvoF_UG i o m) r
   }
+
+runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m x -> x) -> x
+runEvo evo fr0 = F.runF (runEvolution evo) pr fr Nothing
+  where
+    pr v _ = absurd v
+    fr evoF ug = fr0 $ EvoF (suspend evoF) $ \i ->
+        case prepare evoF i
+          of
+            EV (Aw fnext) -> case ug
+              of
+                Just x -> M . return $ fnext x Nothing
+                Nothing -> Aw $ \i2 -> fnext i2 Nothing
+            EV (Yd x next) -> Yd x $ next Nothing
+            EV (M mnext) -> M $ do { next <- mnext; return $ next ug }
+            UnGet x next -> M . return $ next (Just x)
+
+makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
+makeEvo f0 = Evolution $ F.F $ \pr0 fr0 -> f0 pr0 $ \evoF -> fr0 $ EvoF (suspend evoF) (\i -> EV (prepare evoF i))
+            
 
 instance
     Functor (Evolution i o m)
@@ -192,7 +218,7 @@ instance
     MonadTrans (Evolution i o)
   where
     {-# INLINE lift #-}
-    lift ma = Evolution $ Free.liftF $ EvoF (const noEvent) (\_ -> M ma) 
+    lift ma = Evolution $ Free.liftF $ EvoF (const noEvent) (\_ -> EV (M ma)) 
 
 -- | The stream transducer arrow.
 --
@@ -203,109 +229,41 @@ instance
 -- See an introduction at "Control.Arrow.Machine" documentation.
 newtype ProcessT m i o = ProcessT { runProcessT :: Free (EvoF i o m) Void }
 
-{-
-toFreeEvo :: Monad m => Evolution i o m r -> Free (EvoF i o m) r
-toFreeEvo evo = fst $ runState (FT.runFT (runReaderT (runEvolution evo) id) pr fr) (arr fst)
-  where
-    pr = return . return
-    fr next fx = return $ wrap $ fmap `flip` fx $ \x -> fst $ runState (next x) (arr fst)
--}
+unwrapP :: Functor m => ProcessT m i o -> EvoF i o m (ProcessT m i o)
+unwrapP pa = case runProcessT pa
+  of
+    Pure v -> absurd v
+    Free evoF -> ProcessT <$> evoF
 
-composeEvo :: Monad m => Evolution b c m r -> ProcessT m a b -> Evolution a c m r
+composeEvo :: Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
 composeEvo q0 p0 = Evolution $ F $ \pr0 fr0 -> 
     let
-        pr x _ _ = pr0 x
-        fr q ug p = fr0 $ EvoF (suspend q . suspend (unFree p)) $ \i ->
+        fr q p = fr0 $ EvoF (suspend q . suspend (unwrapP p)) $ \i ->
             let
-                susX = suspend (unFree p) i
+                susX = suspend (unwrapP p) i
                 vQ = prepare q susX
-                vP = prepare (unFree p) i
+                vP = prepare (unwrapP p) i
               in
-                case (vP, ug, vQ)
+                EV $ case (vP, vQ)
                   of
-                    (_, _, M mq') -> M (mq' >>= \q' -> return $ q' ug p)
-                    (_, _, UnGet x q') -> M (return $ q' (Just x) p)
-                    (_, _, Yd o q') -> Yd o $ q' Nothing p
-                    (_, Just z, Aw g) -> M (return $ g z Nothing p)
-                    (M mp', Nothing, Aw _) -> M (fr q Nothing <$> mp')
-                    (UnGet x p', Nothing, Aw _) -> UnGet x $ fr q Nothing p'
-                    (Yd z p', Nothing, Aw g) -> M (return $ g z Nothing p')
-                    (Aw f, Nothing, Aw _) -> Aw $ fr q Nothing . f 
+                    (_, M mq') -> M (mq' >>= \q' -> return $ q' p)
+                    (_, Yd o q') -> Yd o $ q' p
+                    (M mp', Aw _) -> M (fr q <$> mp')
+                    (Yd z p', Aw g) -> M (return $ g z p')
+                    (Aw f, Aw _) -> Aw $ fr q . f 
       in
-        F.runF (runEvolution q0) pr fr Nothing (runProcessT p0)
-  where
-    unFree (Pure v) = absurd v
-    unFree (Free x) = x
+        runEvo q0 fr p0
     
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
-evolve = ProcessT . F.fromF . runEvolution
+evolve evo = runEvo evo (\evoP -> ProcessT $ Free.Free $ runProcessT <$> evoP)
 
 finishWith :: Monad m => ProcessT m i o -> Evolution i o m a
-finishWith = fmap absurd . Evolution . F.toF . runProcessT
-
-{-
-idEvo :: Monad m => Evolution i i m Void
-idEvo = Evolution $ ReaderT $ \_ -> StateT $ \(ProcessT mx) ->
-    fmap (\v -> (v, absurd v)) $ toF mx
--}
-
-{-
-class
-    HProfunctor p1 p2 a b c d | p1 -> b, p1 -> c, p2 -> a, p2 -> d, p1 a d -> p2, p2 b c -> p1
+finishWith pa0 = makeEvo $ \_ fr0 -> go fr0 pa0
   where
-    hdimap :: (a -> b) -> (c -> d) -> p1 r -> p2 r
-    
-
-instance
-    HProfunctor (EvoV b c m) (EvoV a d m) a b c d
-  where
-    hdimap f _ (Aw x) = Aw (x . f)
-    hdimap _ g (Yd o x) = Yd (g o) x
-    hdimap _ _ (M mx) = M mx
-
-instance
-    HProfunctor (EvoF b c m) (EvoF a d m) a b c d
-  where
-    hdimap f g (EvoF sus prep) = EvoF (dimap f g sus) (hdimap f g . prep . f)
-
-instance
-    HProfunctor f1 f2 a b c d =>
-    HProfunctor (F f1) (F f2) a b c d
-  where
-    hdimap f g = F.hoistF $ hdimap f g
-
-instance
-    (HProfunctor f1 f2 a b c d, Functor f1, Functor f2) =>
-    HProfunctor (Free f1) (Free f2) a b c d
-  where
-    hdimap f g = Free.hoistFree $ hdimap f g
-
-instance
-    Monad m =>
-    HProfunctor (Evolution b c m) (Evolution a d m) a b c d
-  where
-    hdimap f g = Evolution . hdimap f g . runEvolution
+    go fr0 pa = fr0 $ EvoF (suspend (unwrapP pa)) $ \i ->
+        go fr0 <$> prepare (unwrapP pa) i
 
 
-hlmap :: HProfunctor p1 p2 a b c c => (a -> b) -> p1 r -> p2 r
-hlmap f = hdimap f id
-
-hrmap :: HProfunctor p1 p2 a a b c => (b -> c) -> p1 r -> p2 r
-hrmap g = hdimap id g
--}
-
-dimapEvo :: Monad m => (a -> b) -> (c -> d) -> Evolution b c m Void -> Evolution a d m Void
-dimapEvo f g evo = Evolution $ F.F $ \pr0 fr0 ->
-    let
-        pr x _ = pr0 x
-        fr evoF ug = fr0 $ EvoF (dimap f g $ suspend evoF) (\i -> frV (prepare evoF (f i)) ug)
-        frV (Aw p) Nothing = Aw $ \i -> p (f i) Nothing
-        frV (Aw p) (Just x) = M $ return $ p x Nothing
-        frV (UnGet x next) _ = M $ return $ next (Just x)
-        frV (Yd y next) _ = Yd (g y) $ next Nothing
-        frV (M mnext) ug = M $ do { next <- mnext; return $ next ug }
-      in
-        F.runF (runEvolution evo) pr fr Nothing
 
 -- | Isomorphic to ProcessT when 'a' is ArrowApply.
 type ProcessA a = ProcessT (ArrowMonad a)
@@ -328,16 +286,15 @@ fitW :: (Monad m, Monad m', Functor w) =>
     (forall p. w p -> p) ->
     (forall p q. (p -> m q) -> w p -> m' q) -> 
     ProcessT m b c -> ProcessT m' (w b) c
-fitW extr f pa = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+fitW extr f pa = evolve $ makeEvo $ \_ fr0 ->
     let fr pstep = fr0 $ EvoF (suspend pstep . extr) $ \i ->
             case prepare pstep (extr i)
               of
                 Aw fnext -> Aw $ \i2 -> fnext (extr i2)
-                UnGet x next -> UnGet (x <$ i) next
                 Yd x next -> Yd x next
                 M mnext -> M (f (\_ -> mnext) $ i)
       in
-        F.runF (runEvolution $ finishWith pa) pr0 fr
+        runEvo (finishWith pa) fr
 
 instance
     Monad m => Profunctor (ProcessT m)
@@ -1347,7 +1304,7 @@ stepYield ::
 stepYield lft aw stp pa0 =  go (runProcessT pa0) False Nothing
   where
     go pa done ug = case prepare (unFree pa) noEvent
-        of
+      of
         Aw f -> case (done, ug)
           of 
             (_, Just i) -> go (f i) done Nothing
