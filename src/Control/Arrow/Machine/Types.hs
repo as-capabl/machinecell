@@ -580,13 +580,13 @@ catchP p recover = Evolution $ F.F $ \pr0 fr0 ->
         fr pstep lastval = fr0 $ EvoF (suspend pstep) $ \i ->
             case prepare pstep i
               of
-                Aw fnext -> Aw $ \x -> fnext x (Just x)
-                Yd (collapse -> End) _ ->
+                EV (Aw fnext) -> EV . Aw $ \x -> fnext x (Just x)
+                EV (Yd (collapse -> End) _) ->
                     goRecover lastval $ F.runF (runEvolution recover) pr0 fr0
-                Yd x next -> Yd x $ next Nothing
+                EV (Yd x next) -> EV $ Yd x $ next Nothing
+                EV (M mnext) -> EV . M $ do { next <- mnext; return $ next lastval }
                 UnGet x next -> UnGet x $ next Nothing
-                M mnext -> M $ do { next <- mnext; return $ next lastval }
-        goRecover Nothing = M . return
+        goRecover Nothing = EV . M . return
         goRecover (Just x) = UnGet x
       in
         F.runF (runEvolution p) pr fr Nothing
@@ -653,7 +653,7 @@ yieldProc y pa = ProcessT {
 stopped ::
     (Monad m, Occasional o) =>
     ProcessT m i o
-stopped = evolve $ Evolution $ F.F $ \_ fr -> go fr
+stopped = evolve $ makeEvo $ \_ fr -> go fr
       where
         go fr =
             fr $ EvoF (const end) $ \_ -> Yd end $ 
@@ -702,37 +702,34 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 -- Switches
 --
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-switchAfter p0 = Evolution $ F $ \pr0 fr0 ->
+switchAfter p0 = Evolution $ F.F $ \pr0 fr0 ->
     let
-        pr v _ = absurd v
         fr p ug = fr0 $ EvoF (fst . suspend p) $ \i ->
             case prepare p i
               of
                 Yd (_, Event t) _ -> case ug
                   of
                     Just x -> UnGet x $ pr0 t
-                    Nothing -> M (return $ pr0 t)
-                Yd (x, _) next -> Yd x $ next Nothing
-                UnGet x next -> UnGet x $ next ug 
-                Aw fnext -> Aw $ \x -> fnext x (Just x)
-                M mnext -> M $ do { next <- mnext; return $ next ug }
+                    Nothing -> EV . M . return $ pr0 t
+                Yd (x, _) next -> EV $ Yd x $ next Nothing
+                Aw fnext -> EV . Aw $ \x -> fnext x (Just x)
+                M mnext -> EV . M $ do { next <- mnext; return $ next ug }
       in
-        F.runF (runEvolution $ finishWith p0) pr fr Nothing
+        runEvo (finishWith p0) fr Nothing
 
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-dSwitchAfter p0 = Evolution $ F $ \pr0 fr0 ->
+dSwitchAfter p0 = makeEvo $ \pr0 fr0 ->
     let
         fr p = fr0 $ EvoF (fst . suspend p) $ \i ->
             case prepare p i
               of
                 Yd (x, Event t) _ -> Yd x (pr0 t)
-                Yd (x, _) next -> Yd x next
-                UnGet x next -> UnGet x next
+                Yd (x, _) next -> Yd x nextt
                 Aw fnext -> Aw fnext
                 M mnext -> M mnext
       in
-        F.runF (runEvolution $ finishWith p0) absurd fr
+        runEvo (finishWith p0) fr
 
 {-# INLINE kSwitchAfter #-}
 kSwitchAfter ::
