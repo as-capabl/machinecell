@@ -299,7 +299,16 @@ fitW extr f pa = evolve $ makeEvo $ \_ fr0 ->
 instance
     Monad m => Profunctor (ProcessT m)
   where
-    dimap f g p = evolve $ dimapEvo f g $ finishWith p 
+    dimap f g p = evolve $ makeEvo $ \_ fr0 ->
+        let
+            fr evoF = fr0 $ EvoF (dimap f g $ suspend evoF) $ \i ->
+                case prepare evoF (f i)
+                  of
+                    Aw fnext -> Aw $ fnext . f
+                    Yd x next -> Yd (g x) next
+                    M mnext -> M mnext
+          in
+            runEvo (finishWith p) fr
     {-# INLINE dimap #-}
 
 
@@ -339,7 +348,7 @@ instance
 instance
     Monad m => Arrow (ProcessT m)
   where
-    arr f0 = evolve $ Evolution $ F.F $ \_ fr -> go f0 fr
+    arr f0 = evolve $ makeEvo $ \_ fr -> go f0 fr
       where
         go f fr = 
             fr $ EvoF f $ \_ -> Aw $ \x ->
@@ -366,25 +375,19 @@ instance
     {-# INLINE second #-}            
     -}
 
-    p0 *** pa0 = evolve $ Evolution $ F.F $ \pr0 fr0 ->
+    p0 *** pa0 = evolve $ makeEvo $ \pr0 fr0 ->
         let
-            pr x _ = pr0 x
-            fr paStep p = fr0 $ EvoF (suspend (unFree p) *** suspend paStep) $ \(sus, susA) ->
-                case (prepare (unFree p) sus, prepare paStep susA)
+            fr paStep p = fr0 $ EvoF (suspend (unwrapP p) *** suspend paStep) $ \(sus, susA) ->
+                case (prepare (unwrapP p) sus, prepare paStep susA)
                   of
                     (_, M mnext) -> M $ do { next <- mnext; return $ next p }
                     (M mp', _) -> M $ do { p' <- mp'; return $ fr paStep p' }
                     (Yd y p', Yd ya next) -> Yd (y, ya) $ next p'
-                    (_, Yd ya next) -> Yd (suspend (unFree p) sus, ya) $ next p
+                    (_, Yd ya next) -> Yd (suspend (unwrapP p) sus, ya) $ next p
                     (Yd y p', _) -> Yd (y, suspend paStep susA) $ fr paStep p'
-                    (UnGet x p', UnGet xa next) -> UnGet (x, xa) $ next p'
-                    (_, UnGet xa next) -> UnGet (sus, xa) $ next p
-                    (UnGet x p', _) -> UnGet (x, susA) $ fr paStep p'
                     (Aw fp', Aw fnext) -> Aw (\(x, xa) -> fnext xa (fp' x))
-            unFree (Pure v) = absurd v
-            unFree (Free x) = x
           in
-            F.runF (runEvolution $ finishWith pa0) pr fr (runProcessT p0)
+            runEvo (finishWith pa0) fr p0
     {-# INLINE (***) #-} 
 
 -- rules
@@ -538,10 +541,10 @@ instance
     {-# INLINE await #-}
     await = Evolution $ F.F go
       where
-        go pr fr = fr $ EvoF (const noEvent) $ \_ -> Aw $ \case
+        go pr fr = fr $ EvoF (const noEvent) $ \_ -> EV . Aw $ \case
             Event x -> pr x
             NoEvent -> go pr fr
-            End -> F.runF (runEvolution $ finishWith stopped) pr fr
+            End -> F.runF (runEvolution stop) pr fr
 
 
 class
@@ -553,7 +556,7 @@ instance
     Monad m => MonadYield (Evolution i (Event a) m) a
   where
     {-# INLINE yield #-}
-    yield x = Evolution $ F.liftF $ EvoF (const noEvent) $ \_ -> Yd (Event x) ()
+    yield x = Evolution $ F.liftF $ EvoF (const noEvent) $ \_ -> EV $ Yd (Event x) ()
           
 
 class
