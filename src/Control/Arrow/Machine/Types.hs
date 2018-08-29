@@ -1285,10 +1285,12 @@ chooseProcessT ::
     ProcessT m (Either a1 a2) (Either b1 b2)
 chooseProcessT p0 q0 = evolve $ makeEvo $ \_ fr0 ->
     let
-        go (unwrapP -> p) (unwrapP -> q) = fr0 $ EvoF (suspend p +++ suspend q) $ \case
-            Left i -> undefined -- goV (\case {Left i2 -> i2; _ -> i}) Left p $ \p' -> go p' q
-            Right i -> undefined -- goV q $ \q' -> go p q'
-        goV awPre _ (Aw f) = Aw (f . awPre)
+        go p@(unwrapP -> evoP) q@(unwrapP -> evoQ) = fr0 $ EvoF (suspend evoP +++ suspend evoQ) $ \case
+            Left i -> goV (\case {Left i2 -> i2; _ -> i}) Left (prepare evoP i) $ \p' -> go p' q
+            Right i -> goV (\case {Right i2 -> i2; _ -> i}) Right (prepare evoQ i) $ \q' -> go p q'
+        goV awPre _ (Aw fnext) r = Aw (r . fnext . awPre)
+        goV _ ydPre (Yd x next) r = Yd (ydPre x) (r next)
+        goV _ _ (M mnext) r = M $ r <$> mnext
       in
         go p0 q0
 
