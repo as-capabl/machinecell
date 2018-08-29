@@ -769,7 +769,7 @@ g1SwitchAfter pre post pf = Evolution $ F $ \pr0 fr0 ->
                     (_, Yd (o, _) q') -> EV $ Yd o $ q' Nothing p
                     (M mp', Aw _) -> EV . M $ fr q lastval <$> mp'
                     (Yd z p', Aw g) -> EV . M . return $ g (maybe i id lastval, z) lastval p'
-                    (Aw f, Aw _) -> EV . Aw $ (\i2 -> fr q (Just i2) (f $ pre i2)) 
+                    (Aw f, Aw _) -> EV . Aw $ \i2 -> fr q (Just i2) (f $ pre i2)
       in
         runEvo (finishWith post) fr Nothing pf
   where
