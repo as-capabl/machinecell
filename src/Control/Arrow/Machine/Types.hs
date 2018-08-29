@@ -1342,7 +1342,7 @@ loopProcessT ::
     ProcessT m (a, d) (b, d) ->
     ProcessT m a b
 loopProcessT p = undefined
-loopProcessT2 p = evolve $ Evolution $ F.F $ \_ fr0 ->
+loopProcessT2 p = evolve $ makeEvo $ \_ fr0 ->
     let
         fr evoF = fr0 $ let
             sus = loop $ (\(o, d) -> ((o, d), d)) . suspend evoF
@@ -1352,8 +1352,7 @@ loopProcessT2 p = evolve $ Evolution $ F.F $ \_ fr0 ->
             EvoF susO $ \i -> case prepare evoF (i, susD i)
               of
                 Aw fnext -> Aw $ \i' -> fnext (i', susD i) -- susD i' ?
-                UnGet (x, _) next -> UnGet x next
                 Yd (o, _) next -> Yd o next
                 M mnext -> M mnext
       in
-        F.runF (runEvolution $ finishWith p) absurd fr
+        F.runEvo (finishWith p) fr
