@@ -725,7 +725,7 @@ dSwitchAfter p0 = makeEvo $ \pr0 fr0 ->
             case prepare p i
               of
                 Yd (x, Event t) _ -> Yd x (pr0 t)
-                Yd (x, _) next -> Yd x nextt
+                Yd (x, _) next -> Yd x next
                 Aw fnext -> Aw fnext
                 M mnext -> M mnext
       in
@@ -756,39 +756,25 @@ g1SwitchAfter ::
     Evolution i o m (ProcessT m p q, t)
 g1SwitchAfter pre post pf = Evolution $ F $ \pr0 fr0 -> 
     let
-        pr x _ _ _ _ = absurd x
-        fr q lastval ugp ugq p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unFree p) . pre)) $ \i ->
+        fr q lastval p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unwrapP p) . pre)) $ \i ->
             let
-                susX = suspend (unFree p) $ pre i
+                susX = suspend (unwrapP p) $ pre i
                 vQ = prepare q (i, susX)
-                vP = prepare (unFree p) $ pre i
+                vP = prepare (unwrapP p) $ pre i
               in
-                case (vP, ugq, vQ)
+                case (vP, vQ)
                   of
-                    (_, _, M mq') -> M (mq' >>= \q' -> return $ q' lastval ugp ugq p)
-                    (_, _, UnGet x q') -> M . return $ q' lastval ugp (Just x) p
-                    (_, _, Yd (o, Event t) q') -> goRecover lastval $
-                        pr0 (ProcessT $ ungetNext ugp p, t)
-                    (_, _, Yd (o, _) q') -> Yd o $ q' Nothing ugp Nothing p
-                    (_, Just z, Aw g) -> M . return $ g z lastval ugp Nothing p
-                    (M mp', Nothing, Aw _) -> M (fr q lastval ugp Nothing <$> mp')
-                    (UnGet x p', Nothing, Aw _) -> M . return $ fr q lastval (Just x) Nothing p'
-                    (Yd z p', Nothing, Aw g) -> M . return $ g (maybe i id lastval, z) lastval Nothing Nothing p'
-                    (Aw f, Nothing, Aw _) -> case ugp
-                      of
-                        Just x -> M . return $ fr q lastval Nothing Nothing (f x)
-                        Nothing -> Aw $ (\i2 -> fr q (Just i2) ugp Nothing (f $ pre i2)) 
+                    (_, M mq') -> EV . M $ mq' >>= \q' -> return $ q' lastval p
+                    (_, Yd (o, Event t) q') -> goRecover lastval $ pr0 (p, t)
+                    (_, Yd (o, _) q') -> EV $ Yd o $ q' Nothing p
+                    (M mp', Aw _) -> EV . M $ fr q lastval <$> mp'
+                    (Yd z p', Aw g) -> EV . M . return $ g (maybe i id lastval, z) lastval p'
+                    (Aw f, Aw _) -> EV . Aw $ (\i2 -> fr q (Just i2) (f $ pre i2)) 
       in
-        F.runF (runEvolution $ finishWith post) pr fr Nothing Nothing Nothing (runProcessT pf)
+        runEvo (finishWith post) fr Nothing pf
   where
-    unFree (Pure v) = absurd v
-    unFree (Free x) = x
-
     goRecover (Just x) = UnGet x
-    goRecover Nothing = M . return
-
-    ungetNext (Just x) p = Free $ EvoF (suspend (unFree p)) $ \_ -> UnGet x p
-    ungetNext Nothing p = p
+    goRecover Nothing = EV . M . return
 
 {-# INLINE dg1SwitchAfter #-}
 dg1SwitchAfter ::
@@ -797,38 +783,24 @@ dg1SwitchAfter ::
     ProcessT m (i, q) (o, Event t) ->
     ProcessT m p q ->
     Evolution i o m (ProcessT m p q, t)
-dg1SwitchAfter pre post pf = Evolution $ F $ \pr0 fr0 -> 
+dg1SwitchAfter pre post pf = makeEvo $ \pr0 fr0 -> 
     let
-        pr x _ _ _ _ = absurd x
-        fr q lastval ugp ugq p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unFree p) . pre)) $ \i ->
+        fr q lastval p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unwrapP p) . pre)) $ \i ->
             let
-                susX = suspend (unFree p) $ pre i
+                susX = suspend (unwrapP p) $ pre i
                 vQ = prepare q (i, susX)
-                vP = prepare (unFree p) $ pre i
+                vP = prepare (unwrapP p) $ pre i
               in
-                case (vP, ugq, vQ)
+                case (vP, vQ)
                   of
-                    (_, _, M mq') -> M (mq' >>= \q' -> return $ q' lastval ugp ugq p)
-                    (_, _, UnGet x q') -> M . return $ q' lastval ugp (Just x) p
-                    (_, _, Yd (o, Event t) q') -> Yd o $
-                        pr0 (ProcessT $ ungetNext ugp p, t)
-                    (_, _, Yd (o, _) q') -> Yd o $ q' Nothing ugp Nothing p
-                    (_, Just z, Aw g) -> M . return $ g z lastval ugp Nothing p
-                    (M mp', Nothing, Aw _) -> M (fr q lastval ugp Nothing <$> mp')
-                    (UnGet x p', Nothing, Aw _) -> M . return $ fr q lastval (Just x) Nothing p'
-                    (Yd z p', Nothing, Aw g) -> M . return $ g (maybe i id lastval, z) lastval Nothing Nothing p'
-                    (Aw f, Nothing, Aw _) -> case ugp
-                      of
-                        Just x -> M . return $ fr q lastval Nothing Nothing (f x)
-                        Nothing -> Aw $ (\i2 -> fr q (Just i2) ugp Nothing (f $ pre i2)) 
+                    (_, M mq') -> M (mq' >>= \q' -> return $ q' lastval p)
+                    (_, Yd (o, Event t) q') -> Yd o $ pr0 (p, t)
+                    (_, Yd (o, _) q') -> Yd o $ q' Nothing p
+                    (M mp', Aw _) -> M (fr q lastval <$> mp')
+                    (Yd z p', Aw g) -> M . return $ g (maybe i id lastval, z) lastval p'
+                    (Aw f, Aw _) -> Aw $ (\i2 -> fr q (Just i2) (f $ pre i2)) 
       in
-        F.runF (runEvolution $ finishWith post) pr fr Nothing Nothing Nothing (runProcessT pf)
-  where
-    unFree (Pure v) = absurd v
-    unFree (Free x) = x
-
-    ungetNext (Just x) p = Free $ EvoF (suspend (unFree p)) $ \_ -> UnGet x p
-    ungetNext Nothing p = p
+        runEvo (finishWith post) fr Nothing pf
 
 {-# INLINE gSwitchAfter #-}
 gSwitchAfter ::
@@ -1183,7 +1155,7 @@ unsafeExhaust ::
     (Monad m, Fd.Foldable f) =>
     (b -> m (f c)) ->
     ProcessT m b (Event c)
-unsafeExhaust p = evolve $ Evolution $ F.F $ \_ fr0 ->
+unsafeExhaust p = evolve $ makeEvo $ \_ fr0 ->
     let doCycle = fr0 $ EvoF (const NoEvent) $ \i ->
             M (Fd.foldr yd nextCycle <$> p i)
         yd x next = fr0 $ EvoF (const NoEvent) $ \_ ->
@@ -1200,19 +1172,17 @@ runT ::
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
-runT outpre pa0 = F.runF (runEvolution (finishWith pa0)) absurd frF Nothing False . Fd.toList
+runT outpre pa0 = runEvo (finishWith pa0) frF False . Fd.toList
   where
-    frF evoF ug b l = frV (prepare evoF NoEvent) ug b l
+    frF evoF b l = frV (prepare evoF NoEvent) b l
 
-    frV (Yd (Event x) next) _ _ l = outpre x >> next Nothing False l
-    frV (Yd NoEvent next) _ b l = next Nothing b l
-    frV (Yd End next) _ b _ = next Nothing b []
-    frV (UnGet evx next) _ _ l = next (Just evx) False l
-    frV (M mnext) ug b l = do { next <- mnext; next ug b l } 
-    frV (Aw f) (Just evx) b l = f evx Nothing b l 
-    frV (Aw f) Nothing False (x:xs) = f (Event x) Nothing False xs
-    frV (Aw f) Nothing False [] = f End Nothing True []
-    frV (Aw _) Nothing True _ = return ()
+    frV (Yd (Event x) next) _ l = outpre x >> next False l
+    frV (Yd NoEvent next) b l = next b l
+    frV (Yd End next) b _ = next b []
+    frV (M mnext) b l = do { next <- mnext; next b l } 
+    frV (Aw f) False (x:xs) = f (Event x) False xs
+    frV (Aw f) False [] = f End True []
+    frV (Aw _) True _ = return ()
 
 
 type Builder b = FT.F ((,) b)
@@ -1264,24 +1234,18 @@ stepRun ::
     a -- ^ The argument to the machine.
       ->
     m' (ProcessT m (Event a) (Event b))
-stepRun lft yd stp pa0 x = go (runProcessT pa0) (Just x) Nothing
+stepRun lft yd stp pa0 x = go pa0 (Just x)
   where
-    go pa mx ug = case prepare (unFree pa) noEvent
+    go pa mx = case prepare (unwrapP pa) noEvent
       of
-        Aw f -> case (mx, ug)
+        Aw f -> case mx
           of
-            (_, Just i) -> go (f i) mx Nothing
-            (Just i, Nothing) -> go (f $ Event i) Nothing Nothing
-            (Nothing, Nothing) -> return $ ProcessT pa
-        UnGet xug pa' -> go pa' mx (Just xug)
-        Yd (Event y) pa' -> yd y >> go pa' mx ug
-        Yd NoEvent pa' -> go pa' mx ug
-        Yd End pa' -> lft (runT_ (ProcessT pa') []) >> stp mx >> return stopped
-        M mpa' -> do { pa' <- lft mpa'; go pa' mx ug }
-
-    
-    unFree (Pure v) = absurd v
-    unFree (Free evoF) = evoF
+            Just i -> go (f $ Event i) Nothing
+            Nothing -> return pa
+        Yd (Event y) pa' -> yd y >> go pa' mx
+        Yd NoEvent pa' -> go pa' mx
+        Yd End pa' -> lft (runT_ pa' []) >> stp mx >> return stopped
+        M mpa' -> do { pa' <- lft mpa'; go pa' mx }
 
 -- | Execute until an output produced.
 --
@@ -1301,36 +1265,28 @@ stepYield ::
     ProcessT m (Event a) (Event b) -- ^ The machine to run.
       ->
     m' (Maybe b, ProcessT m (Event a) (Event b))
-stepYield lft aw stp pa0 =  go (runProcessT pa0) False Nothing
+stepYield lft aw stp pa0 =  go pa0 False
   where
-    go pa done ug = case prepare (unFree pa) noEvent
+    go pa done = case prepare (unwrapP pa) noEvent
       of
-        Aw f -> case (done, ug)
+        Aw f -> case done
           of 
-            (_, Just i) -> go (f i) done Nothing
-            (False, Nothing) -> aw >>= \i -> go (f $ Event i) True Nothing
-            (True, Nothing) -> return (Nothing, ProcessT pa)
-        UnGet xug pa' -> go pa' done (Just xug)
-        Yd (Event y) pa' -> return (Just y, ProcessT pa')
-        Yd NoEvent pa' -> go pa' done ug
-        Yd End pa' -> lft (runT_ (ProcessT pa') []) >> stp >> return (Nothing, stopped)
-        M mpa' -> do { pa' <- lft mpa'; go pa' done ug }
-
-    unFree (Pure v) = absurd v
-    unFree (Free evoF) = evoF
+            False -> aw >>= \i -> go (f $ Event i) True
+            True -> return (Nothing, pa)
+        Yd (Event y) pa' -> return (Just y, pa')
+        Yd NoEvent pa' -> go pa' done
+        Yd End pa' -> lft (runT_ pa' []) >> stp >> return (Nothing, stopped)
+        M mpa' -> do { pa' <- lft mpa'; go pa' done }
 
 chooseProcessT ::
     Monad m =>
     ProcessT m a1 b1 ->
     ProcessT m a2 b2 ->
     ProcessT m (Either a1 a2) (Either b1 b2)
-chooseProcessT p0 q0 = evolve $ Evolution $ F.F $ \_ fr0 ->
+chooseProcessT p0 q0 = evolve $ makeEvo $ \_ fr0 ->
     let
-        unwrapP (ProcessT (Pure v)) = absurd v
-        unwrapP (ProcessT (Free fx)) = ProcessT <$> fx
-
         go (unwrapP -> p) (unwrapP -> q) = fr0 $ EvoF (suspend p +++ suspend q) $ \case
-            Left i -> goV (\case {Left i2 -> i2; _ -> i}) Left p $ \p' -> go p' q
+            Left i -> undefined -- goV (\case {Left i2 -> i2; _ -> i}) Left p $ \p' -> go p' q
             Right i -> undefined -- goV q $ \q' -> go p q'
         goV awPre _ (Aw f) = Aw (f . awPre)
       in
@@ -1355,4 +1311,4 @@ loopProcessT2 p = evolve $ makeEvo $ \_ fr0 ->
                 Yd (o, _) next -> Yd o next
                 M mnext -> M mnext
       in
-        F.runEvo (finishWith p) fr
+        runEvo (finishWith p) fr
