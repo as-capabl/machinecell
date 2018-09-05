@@ -38,16 +38,16 @@ import Control.Arrow.Machine.Types
 import Control.Arrow.Machine.Utils
 
 -- $setup
--- >> :set -XArrows
--- >> import Control.Arrow
--- >> import Control.Monad.Trans
+-- >>> :set -XArrows
+-- >>> import Control.Arrow
+-- >>> import Control.Monad.Trans
 
 -- $introduction
 -- As other iteratee or pipe libraries, machinecell abstracts general iteration processes.
 --
 -- Here is an example that is a simple iteration over a list.
 --
--- >> run (evMap (+1)) [1, 2, 3]
+-- >>> run (evMap (+1)) [1, 2, 3]
 -- [2,3,4]
 --
 -- In above statement, "`evMap` (+1)" has a type __"ProcessT Identity (Event Int) (Event Int)"__ ,
@@ -63,7 +63,7 @@ import Control.Arrow.Machine.Utils
 --
 -- ProcessT can run the effects as following.
 --
--- >> runT_ (fire print) [1, 2, 3]
+-- >>> runT_ (fire print) [1, 2, 3]
 -- 1
 -- 2
 -- 3
@@ -83,7 +83,7 @@ import Control.Arrow.Machine.Utils
 --
 -- Then, resulting processes are composed as `Category` using `(\>\>\>)` operator.
 --
--- >> :{
+-- >>> :{
 -- let mySource = repeatedly $
 --       do
 --         _ <- await
@@ -140,7 +140,7 @@ import Control.Arrow.Machine.Utils
 --
 -- If a type has an `Arrow` instance, it can be wrote by ghc extended proc-do notation as following.
 --
--- >> :{
+-- >>> :{
 -- let f :: ProcessT IO (Event Int) (Event ())
 --     f = proc x ->
 --       do
@@ -192,7 +192,7 @@ import Control.Arrow.Machine.Utils
 --
 -- An example is below.
 --
--- >> :{
+-- >>> :{
 -- let f = proc x ->
 --       do
 --         y <- accum 0 -< (+) <$> x
