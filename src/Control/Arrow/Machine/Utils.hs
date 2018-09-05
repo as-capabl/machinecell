@@ -80,7 +80,7 @@ import Control.Arrow.Transformer.Reader (ArrowAddReader(..))
 import Control.Arrow.Machine.Types
 
 -- $setup
--- >> :set -XArrows
+-- >>> :set -XArrows
 
 
 
@@ -98,7 +98,7 @@ dHold old = proc evx ->
 
 -- | Accumulate inputs like fold.
 --
--- >> :{
+-- >>> :{
 -- let pa = proc evx ->
 --       do
 --         val <- accum 0 -< (+1) <$ evx
@@ -121,7 +121,7 @@ accum !x = switch (pure x &&& arr (($x)<$>)) accum'
 
 -- | Delayed version of `accum`.
 --
--- >> :{
+-- >>> :{
 -- let pa = proc evx ->
 --       do
 --         val <- dAccum 0 -< (+1) <$ evx
@@ -309,7 +309,7 @@ tee = proc (e1, e2) -> gather -< [Left <$> e1, Right <$> e2]
 -- |Make multiple event channels into one.
 -- If simultaneous events are given, lefter one is emitted earlier.
 --
--- >> :{
+-- >>> :{
 -- let pa = proc x ->
 --       do
 --         r1 <- filterEvent (\x -> x `mod` 2 == 0) -< x
@@ -347,7 +347,7 @@ gather = arr (Fd.foldMap $ fmap singleton) >>> fork
 
 -- |Given an array-valued event and emit it's values as inidvidual events.
 --
--- >> run fork [[1,2,3],[],[4,5]]
+-- >>> run fork [[1,2,3],[],[4,5]]
 -- [1,2,3,4,5]
 fork ::
     (Monad m, Fd.Foldable f) =>
