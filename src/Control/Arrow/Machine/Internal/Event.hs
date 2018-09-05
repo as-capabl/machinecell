@@ -137,7 +137,7 @@ filterJust = arr filterJust'
 
 -- |Split an event stream.
 --
--- >>> run (filterLeft) [Left 1, Right 2, Left 3, Right 4]
+-- >> run (filterLeft) [Left 1, Right 2, Left 3, Right 4]
 -- [1,3]
 filterLeft ::
     Arrow ar =>
@@ -146,7 +146,7 @@ filterLeft = filterJust <<< evMap (either Just (const Nothing))
 
 -- |Split an event stream.
 --
--- >>> run filterRight [Left 1, Right 2, Left 3, Right 4]
+-- >> run filterRight [Left 1, Right 2, Left 3, Right 4]
 -- [2,4]
 filterRight ::
     Arrow ar =>
@@ -155,10 +155,10 @@ filterRight = filterJust <<< evMap (either (const Nothing) Just)
 
 -- |Split an event stream.
 --
--- >>> run (splitEvent >>> arr fst) [Left 1, Right 2, Left 3, Right 4]
+-- >> run (splitEvent >>> arr fst) [Left 1, Right 2, Left 3, Right 4]
 -- [1,3]
 --
--- >>> run (splitEvent >>> arr snd) [Left 1, Right 2, Left 3, Right 4]
+-- >> run (splitEvent >>> arr snd) [Left 1, Right 2, Left 3, Right 4]
 -- [2,4]
 splitEvent ::
     Arrow ar =>

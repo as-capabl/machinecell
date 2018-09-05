@@ -711,7 +711,7 @@ switchAfter p0 = Evolution $ F.F $ \pr0 fr0 ->
                   of
                     Just x -> UnGet x $ pr0 t
                     Nothing -> EV . M . return $ pr0 t
-                Yd (x, _) next -> EV $ Yd x $ next Nothing
+                Yd (y, _) next -> EV $ Yd y $ next Nothing
                 Aw fnext -> EV . Aw $ \x -> fnext x (Just x)
                 M mnext -> EV . M $ do { next <- mnext; return $ next ug }
       in
@@ -842,7 +842,7 @@ dgSwitchAfter pre post pf = switchAfter $ pre >>> evolve pfpost
 
 -- |Run the 1st transducer at the beggining. Then switch to 2nd when Event t occurs.
 --
--- >>> :{
+-- >> :{
 -- let
 --     before = proc x ->
 --       do
@@ -866,7 +866,7 @@ switch sf k = evolve $
 
 -- |Delayed version of `switch`
 --
--- >>> :{
+-- >> :{
 -- let
 --     before = proc x ->
 --       do
@@ -889,7 +889,7 @@ dSwitch sf k =  evolve $
 
 -- |Recurring switch.
 --
--- >>> :{
+-- >> :{
 -- let pa = proc evtp ->
 --       do
 --         evx <- returnA -< fst <$> evtp
@@ -915,7 +915,7 @@ rSwitch = evolve . go
 
 -- |Delayed version of `rSwitch`.
 --
--- >>> :{
+-- >> :{
 -- let pa = proc evtp ->
 --       do
 --         evx <- returnA -< fst <$> evtp
