@@ -889,7 +889,7 @@ dSwitch sf k =  evolve $
 
 -- |Recurring switch.
 --
--- >> :{
+-- >>> :{
 -- let pa = proc evtp ->
 --       do
 --         evx <- returnA -< fst <$> evtp
@@ -908,9 +908,9 @@ rSwitch ::
     Monad m =>
     ProcessT m b c ->
     ProcessT m (b, Event (ProcessT m b c)) c
-rSwitch = evolve . go
+rSwitch p0 = evolve $ switchAfter (p0 *** Cat.id) >>= go
   where
-    go p = switchAfter (p *** Cat.id) >>= go
+    go p = switchAfter (p *** evolve (await >> finishWith Cat.id)) >>= go
 
 
 -- |Delayed version of `rSwitch`.
