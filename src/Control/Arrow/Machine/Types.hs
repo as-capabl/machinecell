@@ -178,6 +178,15 @@ newtype Evolution i o m r = Evolution
     runEvolution :: F (EvoF_UG i o m) r
   }
 
+{-# RULES
+    "runEvo/makeEvo"
+        forall
+            (s :: forall r. (Void -> r) -> (EvoF i o m r -> r) -> r)
+            (fr :: forall r. EvoF i o m r -> r).
+                runEvo (makeEvo s) fr = s absurd fr
+#-}
+
+{-# INLINE [1] runEvo #-}
 runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m x -> x) -> x
 runEvo evo fr0 = F.runF (runEvolution evo) pr fr Nothing
   where
@@ -193,6 +202,7 @@ runEvo evo fr0 = F.runF (runEvolution evo) pr fr Nothing
             EV (M mnext) -> M $ do { next <- mnext; return $ next ug }
             UnGet x next -> M . return $ next (Just x)
 
+{-# INLINE [1] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
 makeEvo f0 = Evolution $ F.F $ \pr0 fr0 -> f0 pr0 $ \evoF -> fr0 $ EvoF (suspend evoF) (\i -> EV (prepare evoF i))
             
@@ -253,10 +263,16 @@ composeEvo q0 p0 = Evolution $ F $ \pr0 fr0 ->
                     (Aw f, Aw _) -> Aw $ fr q . f 
       in
         runEvo q0 fr p0
-    
+
+
+{-# RULES
+    "evolve/finishWith" forall p. evolve (finishWith p) = p
+#-}
+{-# INLINE[1] evolve #-}
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
 evolve evo = runEvo evo (\evoP -> ProcessT $ Free.Free $ runProcessT <$> evoP)
 
+{-# INLINE[1] finishWith #-}
 finishWith :: Monad m => ProcessT m i o -> Evolution i o m a
 finishWith pa0 = makeEvo $ \_ fr0 -> go fr0 pa0
   where
