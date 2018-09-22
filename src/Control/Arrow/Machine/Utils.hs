@@ -115,9 +115,13 @@ dHold old = proc evx ->
 
 accum ::
     Monad m => b -> ProcessT m (Event (b->b)) b
-accum !x = switch (pure x &&& arr (($x)<$>)) accum'
-  where
-    accum' y = dSwitch (pure y &&& Cat.id) (const (accum y))
+accum x0 = evolve $ fmap fst $ runStateT `flip` x0 $ forever $
+  do
+    x <- get
+    f <- lift $ switchAfter $ pure x &&& Cat.id
+    let !x' = f x
+    _ <- lift $ dSwitchAfter $ pure x' &&& Cat.id
+    put x'  
 
 -- | Delayed version of `accum`.
 --
