@@ -41,6 +41,7 @@ import Control.Arrow.Machine.Utils
 -- >>> :set -XArrows
 -- >>> import Control.Arrow
 -- >>> import Control.Monad.Trans
+-- >>> import Control.Arrow.Machine.AdditionalInstances
 
 -- $introduction
 -- As other iteratee or pipe libraries, machinecell abstracts general iteration processes.
@@ -258,7 +259,7 @@ import Control.Arrow.Machine.Utils
 --
 -- In example below, result is [0, 0, 0, 0], not [1, 2, 3, 4].
 --
--- >> :{
+-- >>> :{
 -- let f = proc x ->
 --       do
 --         rec

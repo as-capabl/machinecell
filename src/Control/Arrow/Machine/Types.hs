@@ -1338,8 +1338,7 @@ loopProcessT ::
     Monad m =>
     ProcessT m (a, d) (b, d) ->
     ProcessT m a b
-loopProcessT p = undefined
-loopProcessT2 p = evolve $ makeEvo $ \_ fr0 ->
+loopProcessT p = evolve $ makeEvo $ \_ fr0 ->
     let
         fr evoF = fr0 $ let
             sus = loop $ (\(o, d) -> ((o, d), d)) . suspend evoF

@@ -56,8 +56,8 @@ This module should be imported manually. Qualified import is recommended.
 This module provides an abstraction that continuous values with
 finite number of changing points.
 
->> import qualified Control.Arrow.Machine.Misc.Discrete as D
->> P.run (D.hold "apple" >>> D.arr reverse >>> D.edge) ["orange", "grape"]
+>>> import qualified Control.Arrow.Machine.Misc.Discrete as D
+>>> P.run (D.hold "apple" >>> D.arr reverse >>> D.edge) ["orange", "grape"]
 ["elppa","egnaro","eparg"]
 
 In above example, input data of "reverse" is continuous.

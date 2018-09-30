@@ -147,10 +147,10 @@ dAccum !x = dSwitch (pure x &&& arr (($x)<$>)) dAccum
 
 -- |Detects edges of input behaviour.
 --
--- >> run (hold 0 >>> edge) [1, 1, 2, 2, 2, 3]
+-- >>> run (hold 0 >>> edge) [1, 1, 2, 2, 2, 3]
 -- [0,1,2,3]
 --
--- >> run (hold 0 >>> edge) [0, 1, 1, 2, 2, 2, 3]
+-- >>> run (hold 0 >>> edge) [0, 1, 1, 2, 2, 2, 3]
 -- [0,1,2,3]
 edge ::
     (Monad m, Eq b) =>
@@ -326,7 +326,7 @@ tee = proc (e1, e2) -> gather -< [Left <$> e1, Right <$> e2]
 --
 -- It is terminated when the last input finishes.
 --
--- >> :{
+-- >>> :{
 -- let pa = proc x ->
 --       do
 --         r1 <- filterEvent (\x -> x `mod` 3 == 0) -< x :: Event Int
@@ -406,7 +406,7 @@ now ::
 now = oneshot ()
 
 -- |Emit an event at the end of the input stream.
--- >> :{
+-- >>> :{
 -- let
 --     pa = proc evx ->
 --       do
