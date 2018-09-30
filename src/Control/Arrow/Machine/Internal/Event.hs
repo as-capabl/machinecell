@@ -22,6 +22,9 @@ import Control.Arrow
 import Data.Semigroup (Semigroup ((<>)))
 import Data.Void
 
+-- $setup
+-- >>> import Control.Arrow.Machine
+
 
 -- | Discrete events on a time line.
 -- Created and consumed by various transducers.

@@ -17,6 +17,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE RoleAnnotations #-}
 module
     Control.Arrow.Machine.Types
       (
@@ -131,17 +132,11 @@ import Data.Void
 import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
-import Control.Monad.State.Strict
-import Control.Monad.Reader
-import Control.Monad.Writer hiding ((<>))
 import Control.Monad.Identity
-import Control.Monad.Trans.Cont
 import Control.Applicative
 import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup ((<>)))
-import Data.Maybe (fromMaybe, isNothing, isJust)
-import Control.Monad.Trans.Free.Church (FT ())
 import qualified Control.Monad.Trans.Free.Church as FT
 import Control.Monad.Free.Church (F ())
 import Control.Monad.Free.Church as F
@@ -169,6 +164,8 @@ data EvoF' evoV i o m a = EvoF
   }
   deriving Functor
 
+-- type role EvoF' representational representational representational representational representational
+  
 type EvoF = EvoF' EvoV
 
 type EvoF_UG = EvoF' EvoV_UG
@@ -178,6 +175,15 @@ newtype Evolution i o m r = Evolution
     runEvolution :: F (EvoF_UG i o m) r
   }
 
+{-# RULES
+    "runEvo/makeEvo"
+        forall
+            (s :: forall r. (Void -> r) -> (EvoF i o m r -> r) -> r)
+            (fr :: forall r. EvoF i o m r -> r).
+                runEvo (makeEvo s) fr = s absurd fr
+#-}
+
+{-# INLINE [0] runEvo #-}
 runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m x -> x) -> x
 runEvo evo fr0 = F.runF (runEvolution evo) pr fr Nothing
   where
@@ -193,6 +199,7 @@ runEvo evo fr0 = F.runF (runEvolution evo) pr fr Nothing
             EV (M mnext) -> M $ do { next <- mnext; return $ next ug }
             UnGet x next -> M . return $ next (Just x)
 
+{-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
 makeEvo f0 = Evolution $ F.F $ \pr0 fr0 -> f0 pr0 $ \evoF -> fr0 $ EvoF (suspend evoF) (\i -> EV (prepare evoF i))
             
@@ -235,6 +242,9 @@ unwrapP pa = case runProcessT pa
     Pure v -> absurd v
     Free evoF -> ProcessT <$> evoF
 
+{-# INLINE [1] compositeProc #-}
+compositeProc f g = evolve $ composeEvo (finishWith g) f
+
 composeEvo :: Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
 composeEvo q0 p0 = Evolution $ F $ \pr0 fr0 -> 
     let
@@ -253,10 +263,16 @@ composeEvo q0 p0 = Evolution $ F $ \pr0 fr0 ->
                     (Aw f, Aw _) -> Aw $ fr q . f 
       in
         runEvo q0 fr p0
-    
+
+
+{-# RULES
+    "evolve/finishWith" forall p. evolve (finishWith p) = p
+#-}
+{-# INLINE[0] evolve #-}
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
 evolve evo = runEvo evo (\evoP -> ProcessT $ Free.Free $ runProcessT <$> evoP)
 
+{-# INLINE[0] finishWith #-}
 finishWith :: Monad m => ProcessT m i o -> Evolution i o m a
 finishWith pa0 = makeEvo $ \_ fr0 -> go fr0 pa0
   where
@@ -296,19 +312,23 @@ fitW extr f pa = evolve $ makeEvo $ \_ fr0 ->
       in
         runEvo (finishWith pa) fr
 
+{-# INLINE [1] dimapProc #-}
+dimapProc :: Monad m => (a -> b) -> (c -> d) -> ProcessT m b c -> ProcessT m a d
+dimapProc f g p = evolve $ makeEvo $ \_ fr0 ->
+    let
+        fr evoF = fr0 $ EvoF (dimap f g $ suspend evoF) $ \i ->
+            case prepare evoF (f i)
+              of
+                Aw fnext -> Aw $ fnext . f
+                Yd x next -> Yd (g x) next
+                M mnext -> M mnext
+      in
+        runEvo (finishWith p) fr
+
 instance
     Monad m => Profunctor (ProcessT m)
   where
-    dimap f g p = evolve $ makeEvo $ \_ fr0 ->
-        let
-            fr evoF = fr0 $ EvoF (dimap f g $ suspend evoF) $ \i ->
-                case prepare evoF (f i)
-                  of
-                    Aw fnext -> Aw $ fnext . f
-                    Yd x next -> Yd (g x) next
-                    M mnext -> M mnext
-          in
-            runEvo (finishWith p) fr
+    dimap = dimapProc
     {-# INLINE dimap #-}
 
 
@@ -338,22 +358,52 @@ instance
 instance
     Monad m => Cat.Category (ProcessT m)
   where
-    id = arr id
+    id = idProc
     {-# INLINE id #-}
 
-    g . f = evolve $ composeEvo (finishWith g) f
+    g . f = compositeProc f g
     {-# INLINE (.) #-}
 
+{-# INLINE [1] idProc #-}
+idProc :: Monad m => ProcessT m a a
+idProc = evolve $ makeEvo $ \_ fr -> go fr
+    where
+        go fr = 
+            fr $ EvoF id $ \_ -> Aw $ \x ->
+            fr $ EvoF id $ \_ -> Yd x $
+            go fr
+
+
+{-# INLINE [1] arrProc #-}
+arrProc :: Monad m => (a -> b) -> ProcessT m a b
+arrProc f0 = evolve $ makeEvo $ \_ fr -> go f0 fr
+    where
+      go f fr = 
+          fr $ EvoF f $ \_ -> Aw $ \x ->
+          fr $ EvoF f $ \_ -> Yd (f x) $
+          go f fr
+
+{-# INLINE [1] parProc #-}
+parProc :: Monad m =>
+    ProcessT m a b -> ProcessT m c d -> ProcessT m (a, c) (b, d)
+parProc p0 pa0 = evolve $ makeEvo $ \pr0 fr0 ->
+    let
+        fr paStep p = fr0 $ EvoF (suspend (unwrapP p) *** suspend paStep) $ \(sus, susA) ->
+            case (prepare (unwrapP p) sus, prepare paStep susA)
+              of
+                (_, M mnext) -> M $ do { next <- mnext; return $ next p }
+                (M mp', _) -> M $ do { p' <- mp'; return $ fr paStep p' }
+                (Yd y p', Yd ya next) -> Yd (y, ya) $ next p'
+                (_, Yd ya next) -> Yd (suspend (unwrapP p) sus, ya) $ next p
+                (Yd y p', _) -> Yd (y, suspend paStep susA) $ fr paStep p'
+                (Aw fp', Aw fnext) -> Aw (\(x, xa) -> fnext xa (fp' x))
+      in
+        runEvo (finishWith pa0) fr p0
 
 instance
     Monad m => Arrow (ProcessT m)
   where
-    arr f0 = evolve $ makeEvo $ \_ fr -> go f0 fr
-      where
-        go f fr = 
-            fr $ EvoF f $ \_ -> Aw $ \x ->
-            fr $ EvoF f $ \_ -> Yd (f x) $
-            go f fr
+    arr = arrProc
     {-# INLINE arr #-}
 
     {-
@@ -375,19 +425,7 @@ instance
     {-# INLINE second #-}            
     -}
 
-    p0 *** pa0 = evolve $ makeEvo $ \pr0 fr0 ->
-        let
-            fr paStep p = fr0 $ EvoF (suspend (unwrapP p) *** suspend paStep) $ \(sus, susA) ->
-                case (prepare (unwrapP p) sus, prepare paStep susA)
-                  of
-                    (_, M mnext) -> M $ do { next <- mnext; return $ next p }
-                    (M mp', _) -> M $ do { p' <- mp'; return $ fr paStep p' }
-                    (Yd y p', Yd ya next) -> Yd (y, ya) $ next p'
-                    (_, Yd ya next) -> Yd (suspend (unwrapP p) sus, ya) $ next p
-                    (Yd y p', _) -> Yd (y, suspend paStep susA) $ fr paStep p'
-                    (Aw fp', Aw fnext) -> Aw (\(x, xa) -> fnext xa (fp' x))
-          in
-            runEvo (finishWith pa0) fr p0
+    (***) = parProc
     {-# INLINE (***) #-} 
 
 -- rules
@@ -436,13 +474,14 @@ instance
         compositeProc (arrProc (g . f)) h
 "ProcessT: arr/arr-2"
     forall f g. compositeProc (arrProc f) (arrProc g) = arrProc (g . f)
-"ProcessT: arr/*" [1]
+"ProcessT: arr/*"
     forall f g. compositeProc (arrProc f) g = dimapProc f id g
-"ProcessT: */arr" [1]
+"ProcessT: */arr"
     forall f g. compositeProc f (arrProc g) = dimapProc id g f
-"ProcessT: arr***arr" [1]
+"ProcessT: arr***arr"
     forall f g. parProc (arrProc f) (arrProc g) = arrProc (f *** g)
-  -}
+-}
+
 {-
 instance
     Monad m => ArrowChoice (ProcessT m)
@@ -908,9 +947,9 @@ rSwitch ::
     Monad m =>
     ProcessT m b c ->
     ProcessT m (b, Event (ProcessT m b c)) c
-rSwitch = evolve . go
+rSwitch p0 = evolve $ switchAfter (p0 *** Cat.id) >>= go
   where
-    go p = switchAfter (p *** Cat.id) >>= go
+    go p = switchAfter (p *** evolve (await >> finishWith Cat.id)) >>= go
 
 
 -- |Delayed version of `rSwitch`.
@@ -1299,8 +1338,7 @@ loopProcessT ::
     Monad m =>
     ProcessT m (a, d) (b, d) ->
     ProcessT m a b
-loopProcessT p = undefined
-loopProcessT2 p = evolve $ makeEvo $ \_ fr0 ->
+loopProcessT p = evolve $ makeEvo $ \_ fr0 ->
     let
         fr evoF = fr0 $ let
             sus = loop $ (\(o, d) -> ((o, d), d)) . suspend evoF
