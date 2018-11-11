@@ -18,6 +18,7 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE PatternSynonyms #-}
 module
     Control.Arrow.Machine.Types
       (
@@ -143,19 +144,22 @@ import Control.Monad.Free.Church as F
 import Control.Monad.Free
 import qualified Control.Monad.Free as Free
 import GHC.Exts (build)
+import Unsafe.Coerce
 
 import Control.Arrow.Machine.Internal.Event
-    
-data EvoV i o m a =
+
+data EvoV_ ug i o m a =
     Aw (i -> a) |
     Yd o a |
-    M (m a)
+    M (m a) |
+    UnGet_ ug i a
   deriving Functor
 
-data EvoV_UG i o m a =
-    EV (EvoV i o m a) |
-    UnGet i a
-  deriving Functor
+type EvoV = EvoV_ Void
+type EvoV_UG = EvoV_ ()
+
+pattern EV fx = fx
+pattern UnGet i x = UnGet_ () i x 
 
 data EvoF' evoV i o m a = EvoF
   {
@@ -167,7 +171,6 @@ data EvoF' evoV i o m a = EvoF
 -- type role EvoF' representational representational representational representational representational
   
 type EvoF = EvoF' EvoV
-
 type EvoF_UG = EvoF' EvoV_UG
 
 newtype Evolution i o m r = Evolution 
@@ -201,8 +204,8 @@ runEvo evo fr0 = F.runF (runEvolution evo) pr fr Nothing
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
-makeEvo f0 = Evolution $ F.F $ \pr0 fr0 -> f0 pr0 $ \evoF -> fr0 $ EvoF (suspend evoF) (\i -> EV (prepare evoF i))
-            
+-- makeEvo f0 = Evolution $ F.F $ \pr0 fr0 -> f0 pr0 $ \evoF -> fr0 $ EvoF (suspend evoF) (\i -> EV (prepare evoF i))
+makeEvo = unsafeCoerce         
 
 instance
     Functor (Evolution i o m)
