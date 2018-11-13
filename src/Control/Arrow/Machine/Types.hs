@@ -134,6 +134,7 @@ import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Identity
+import Control.Monad.Skeleton
 import Control.Applicative
 import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
@@ -152,7 +153,7 @@ data EvoV_ ug i o m a =
     Aw (i -> a) |
     Yd o a |
     M (m a) |
-    UnGet_ ug i a
+    UnGet_ !ug i a
   deriving Functor
 
 type EvoV = EvoV_ Void
@@ -175,7 +176,7 @@ type EvoF_UG = EvoF' EvoV_UG
 
 newtype Evolution i o m r = Evolution 
   {
-    runEvolution :: F (EvoF_UG i o m) r
+    runEvolution :: Skeleton (EvoF_UG i o m) r
   }
 
 {-# RULES
@@ -188,19 +189,19 @@ newtype Evolution i o m r = Evolution
 
 {-# INLINE [0] runEvo #-}
 runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m x -> x) -> x
-runEvo evo fr0 = F.runF (runEvolution evo) pr fr Nothing
+runEvo evo fr0 = go (runEvolution evo) Nothing
   where
-    pr v _ = absurd v
-    fr evoF ug = fr0 $ EvoF (suspend evoF) $ \i ->
+    go (debone -> Return v) _ = absurd v
+    go (debone -> evoF :>>= cnt) ug = fr0 $ EvoF (suspend evoF) $ \i ->
         case prepare evoF i
           of
-            EV (Aw fnext) -> case ug
+            Aw fnext -> case ug
               of
-                Just x -> M . return $ fnext x Nothing
-                Nothing -> Aw $ \i2 -> fnext i2 Nothing
-            EV (Yd x next) -> Yd x $ next Nothing
-            EV (M mnext) -> M $ do { next <- mnext; return $ next ug }
-            UnGet x next -> M . return $ next (Just x)
+                Just x -> M . return $ go (cnt (fnext x)) Nothing
+                Nothing -> Aw $ \i2 -> go (cnt (fnext i2)) Nothing
+            Yd x next -> Yd x $ go (cnt next) Nothing
+            M mnext -> M $ do { next <- mnext; return $ go (cnt next) ug }
+            UnGet x next -> M . return $ go (cnt next) (Just x)
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
@@ -228,7 +229,7 @@ instance
     MonadTrans (Evolution i o)
   where
     {-# INLINE lift #-}
-    lift ma = Evolution $ Free.liftF $ EvoF (const noEvent) (\_ -> EV (M ma)) 
+    lift ma = Evolution $ bone $ EvoF (const noEvent) (\_ -> EV (M ma)) 
 
 -- | The stream transducer arrow.
 --
@@ -237,21 +238,23 @@ instance
 -- or arrow combinations of them.
 --
 -- See an introduction at "Control.Arrow.Machine" documentation.
-newtype ProcessT m i o = ProcessT { runProcessT :: Free (EvoF i o m) Void }
+newtype ProcessT m i o = ProcessT { runProcessT :: Skeleton (EvoF i o m) Void }
 
 unwrapP :: Functor m => ProcessT m i o -> EvoF i o m (ProcessT m i o)
-unwrapP pa = case runProcessT pa
+unwrapP pa = case debone (runProcessT pa)
   of
-    Pure v -> absurd v
-    Free evoF -> ProcessT <$> evoF
+    Return v -> absurd v
+    evoF :>>= cnt -> ProcessT <$> (cnt <$> evoF)
 
 {-# INLINE [1] compositeProc #-}
 compositeProc f g = evolve $ composeEvo (finishWith g) f
 
 composeEvo :: Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
-composeEvo q0 p0 = Evolution $ F $ \pr0 fr0 -> 
-    let
-        fr q p = fr0 $ EvoF (suspend q . suspend (unwrapP p)) $ \i ->
+composeEvo q0 p0 = Evolution $ go q0 p0 
+    where
+        go (debone -> Return v) _ = absurd v
+        go (debone -> evoF :>>= cnt) p = goMV evoF p :>>= cnt
+        goMV evoF p = EvoF (suspend q . suspend (unwrapP p)) $ \i ->
             let
                 susX = suspend (unwrapP p) i
                 vQ = prepare q susX
@@ -264,8 +267,6 @@ composeEvo q0 p0 = Evolution $ F $ \pr0 fr0 ->
                     (M mp', Aw _) -> M (fr q <$> mp')
                     (Yd z p', Aw g) -> M (return $ g z p')
                     (Aw f, Aw _) -> Aw $ fr q . f 
-      in
-        runEvo q0 fr p0
 
 
 {-# RULES
@@ -581,12 +582,14 @@ instance
     MonadAwait (Evolution (Event a) o m) a
   where
     {-# INLINE await #-}
-    await = Evolution $ F.F go
+    await = Evolution go
       where
-        go pr fr = fr $ EvoF (const noEvent) $ \_ -> EV . Aw $ \case
-            Event x -> pr x
-            NoEvent -> go pr fr
-            End -> F.runF (runEvolution stop) pr fr
+        go = boned $ goMV :>>= return
+        
+        goMV = EvoF (const noEvent) $ \_ -> EV . Aw $ \case
+            Event x -> return x
+            NoEvent -> go
+            End -> runEvolution stop
 
 
 class
@@ -598,7 +601,7 @@ instance
     Monad m => MonadYield (Evolution i (Event a) m) a
   where
     {-# INLINE yield #-}
-    yield x = Evolution $ F.liftF $ EvoF (const noEvent) $ \_ -> EV $ Yd (Event x) ()
+    yield x = Evolution $ bone $ EvoF (const noEvent) $ \_ -> EV $ Yd (Event x) ()
           
 
 class
