@@ -130,6 +130,7 @@ where
 import qualified Control.Category as Cat
 import Data.Profunctor (Profunctor, dimap, rmap, lmap)
 import Data.Void
+import Data.Maybe (fromMaybe)
 import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
@@ -206,7 +207,12 @@ runEvo evo fr0 = go (runEvolution evo) Nothing
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
 -- makeEvo f0 = Evolution $ F.F $ \pr0 fr0 -> f0 pr0 $ \evoF -> fr0 $ EvoF (suspend evoF) (\i -> EV (prepare evoF i))
-makeEvo = unsafeCoerce         
+makeEvo f = Evolution $ f return (\evoF -> boned $ (EvoF (suspend evoF) (\i -> convV (prepare evoF i))) :>>= id)
+  where
+    convV (Aw f) = Aw f
+    convV (Yd o r) = Yd o r
+    convV (M mr) = M mr
+    convV (UnGet_ v _ _) = absurd v
 
 instance
     Functor (Evolution i o m)
@@ -249,24 +255,28 @@ unwrapP pa = case debone (runProcessT pa)
 {-# INLINE [1] compositeProc #-}
 compositeProc f g = evolve $ composeEvo (finishWith g) f
 
-composeEvo :: Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
-composeEvo q0 p0 = Evolution $ go q0 p0 
-    where
-        go (debone -> Return v) _ = absurd v
-        go (debone -> evoF :>>= cnt) p = goMV evoF p :>>= cnt
-        goMV evoF p = EvoF (suspend q . suspend (unwrapP p)) $ \i ->
+composeEvo :: forall a b c m. Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
+composeEvo q0 p0 = Evolution $ 
+    let
+        go :: (ProcessT m a b, Skeleton (EvoF_UG b c m) Void) -> Skeleton (EvoF_UG a c m) Void
+        go pq = boned $ goF pq :>>= go
+
+        goF (_, debone -> Return v) = absurd v
+        goF (p, q@(debone -> evoF :>>= cnt)) = EvoF (suspend evoF . suspend (unwrapP p)) $ \i ->
             let
                 susX = suspend (unwrapP p) i
-                vQ = prepare q susX
+                vQ = prepare evoF susX
                 vP = prepare (unwrapP p) i
               in
                 EV $ case (vP, vQ)
                   of
-                    (_, M mq') -> M (mq' >>= \q' -> return $ q' p)
-                    (_, Yd o q') -> Yd o $ q' p
-                    (M mp', Aw _) -> M (fr q <$> mp')
-                    (Yd z p', Aw g) -> M (return $ g z p')
-                    (Aw f, Aw _) -> Aw $ fr q . f 
+                    (_, M mq') -> M (mq' >>= \q' -> return (p, cnt q'))
+                    (_, Yd o q') -> Yd o (p, cnt q')
+                    (M mp', Aw _) -> M (mp' >>= \p' -> return (p', q))
+                    (Yd z p', Aw g) -> M (return (p', cnt $ g z))
+                    (Aw f, Aw _) -> Aw $ (,q) . f 
+      in
+        go (p0, runEvolution q0)
 
 
 {-# RULES
@@ -274,7 +284,7 @@ composeEvo q0 p0 = Evolution $ go q0 p0
 #-}
 {-# INLINE[0] evolve #-}
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
-evolve evo = runEvo evo (\evoP -> ProcessT $ Free.Free $ runProcessT <$> evoP)
+evolve evo = ProcessT . boned $ runEvo evo (\evoP -> evoP :>>= boned)
 
 {-# INLINE[0] finishWith #-}
 finishWith :: Monad m => ProcessT m i o -> Evolution i o m a
@@ -584,12 +594,12 @@ instance
     {-# INLINE await #-}
     await = Evolution go
       where
-        go = boned $ goMV :>>= return
+        go = boned $ goMV :>>= fromMaybe go
         
-        goMV = EvoF (const noEvent) $ \_ -> EV . Aw $ \case
-            Event x -> return x
-            NoEvent -> go
-            End -> runEvolution stop
+        goMV = EvoF (const noEvent) $ \_ -> Aw $ \case
+            Event x -> Just $ return x
+            NoEvent -> Nothing
+            End -> Just $ runEvolution stop
 
 
 class
@@ -619,22 +629,25 @@ instance
 
 catchP:: (Monad m, Occasional' o) =>
     Evolution i o m a -> Evolution i o m a -> Evolution i o m a
-catchP p recover = Evolution $ F.F $ \pr0 fr0 ->
+catchP p recover = Evolution $
     let 
-        pr x _ = pr0 x
-        fr pstep lastval = fr0 $ EvoF (suspend pstep) $ \i ->
+        go (Just (debone -> Return x), _) = return x
+        go (Just (debone -> pstep :>>= cnt), lastval) = boned $ goMV pstep lastval :>>= \(x, lv') -> go (cnt <$> x, lv') 
+        go (Nothing, _) = runEvolution recover
+
+        goMV pstep lastval = EvoF (suspend pstep) $ \i ->
             case prepare pstep i
               of
-                EV (Aw fnext) -> EV . Aw $ \x -> fnext x (Just x)
-                EV (Yd (collapse -> End) _) ->
-                    goRecover lastval $ F.runF (runEvolution recover) pr0 fr0
-                EV (Yd x next) -> EV $ Yd x $ next Nothing
-                EV (M mnext) -> EV . M $ do { next <- mnext; return $ next lastval }
-                UnGet x next -> UnGet x $ next Nothing
-        goRecover Nothing = EV . M . return
-        goRecover (Just x) = UnGet x
+                Aw fnext -> Aw $ \x -> (Just $ fnext x, (Just x))
+                Yd (collapse -> End) _ -> case lastval
+                  of
+                    Just x -> UnGet x (Nothing, Nothing)
+                    Nothing -> M $ return (Nothing, Nothing)
+                Yd x next -> Yd x (Just next, Nothing)
+                M mnext -> M $ do { next <- mnext; return (Just next, lastval) }
+                UnGet x next -> UnGet x (Just next, Nothing)
       in
-        F.runF (runEvolution p) pr fr Nothing
+        go (Just $ runEvolution p, Nothing)
 
 {-
 catchP (PlanT pl) next0 =
