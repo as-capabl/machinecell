@@ -760,20 +760,23 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 -- Switches
 --
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-switchAfter p0 = Evolution $ F.F $ \pr0 fr0 ->
+switchAfter p0 = Evolution $
     let
-        fr p ug = fr0 $ EvoF (fst . suspend p) $ \i ->
+        go (Left x, _) = return x
+        go (Right (debone -> p :>>= cnt), ug) = boned $ goMV (p, ug) :>>= \(eth, ug') -> go (cnt <$> eth, ug')
+        
+        goMV (p, ug) = EvoF (fst . suspend p) $ \i ->
             case prepare p i
               of
                 Yd (_, Event t) _ -> case ug
                   of
-                    Just x -> UnGet x $ pr0 t
-                    Nothing -> EV . M . return $ pr0 t
-                Yd (x, _) next -> EV $ Yd x $ next Nothing
-                Aw fnext -> EV . Aw $ \x -> fnext x (Just x)
-                M mnext -> EV . M $ do { next <- mnext; return $ next ug }
+                    Just x -> UnGet x (Left t, Nothing)
+                    Nothing -> M $ return (Left t, Nothing)
+                Yd (x, _) next -> Yd x (Right next, Nothing)
+                Aw fnext -> Aw $ \x -> (Right $ fnext x, Just x)
+                M mnext -> M $ do { next <- mnext; return (Right next, ug) }
       in
-        runEvo (finishWith p0) fr Nothing
+        go (Right $ runProcessT p0, Nothing)
 
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
@@ -812,9 +815,14 @@ g1SwitchAfter ::
     ProcessT m (i, q) (o, Event t) ->
     ProcessT m p q ->
     Evolution i o m (ProcessT m p q, t)
-g1SwitchAfter pre post pf = Evolution $ F $ \pr0 fr0 -> 
+g1SwitchAfter pre post pf = Evolution $ 
     let
-        fr q lastval p = fr0 $ EvoF (fst . suspend q . (id &&& suspend (unwrapP p) . pre)) $ \i ->
+        go (_, debone -> Return v, _) = absurd v
+        go (p, qskel @ (debone -> q :>>= cnt), lv) = boned $ goMV (p, cnt <$> q, lv) :>>= \case
+            Left r -> return r
+            Right (p', q', lv') -> go (p', fromMaybe qskel q', lv')
+
+        goMV (p, q, lastval) = EvoF (fst . suspend q . (id &&& suspend (unwrapP p) . pre)) $ \i ->
             let
                 susX = suspend (unwrapP p) $ pre i
                 vQ = prepare q (i, susX)
@@ -822,17 +830,17 @@ g1SwitchAfter pre post pf = Evolution $ F $ \pr0 fr0 ->
               in
                 case (vP, vQ)
                   of
-                    (_, M mq') -> EV . M $ mq' >>= \q' -> return $ q' lastval p
-                    (_, Yd (o, Event t) q') -> goRecover lastval $ pr0 (p, t)
-                    (_, Yd (o, _) q') -> EV $ Yd o $ q' Nothing p
-                    (M mp', Aw _) -> EV . M $ fr q lastval <$> mp'
-                    (Yd z p', Aw g) -> EV . M . return $ g (maybe i id lastval, z) lastval p'
-                    (Aw f, Aw _) -> EV . Aw $ \i2 -> fr q (Just i2) (f $ pre i2)
+                    (_, M mq') -> M $ mq' >>= \q' -> return $ Right (p, Just q', lastval)
+                    (_, Yd (o, Event t) q') -> goRecover lastval $ Left (p, t)
+                    (_, Yd (o, _) q') -> Yd o $ Right (p, Just q', Nothing)
+                    (M mp', Aw _) -> M $ mp' >>= \p' -> return $ Right (p', Nothing, lastval)
+                    (Yd z p', Aw g) -> M $ return $ Right $ (p', Just $ g (maybe i id lastval, z), lastval)
+                    (Aw f, Aw _) -> Aw $ \i2 -> Right $ (f $ pre i2, Nothing, Just i2)
       in
-        runEvo (finishWith post) fr Nothing pf
+        go (pf, runProcessT post, Nothing)
   where
     goRecover (Just x) = UnGet x
-    goRecover Nothing = EV . M . return
+    goRecover Nothing = M . return
 
 {-# INLINE dg1SwitchAfter #-}
 dg1SwitchAfter ::
