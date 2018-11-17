@@ -776,23 +776,23 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 switchAfter p0 = Evolution $
     let
-        go (Left x, _) = return x
-        go (Right (debone -> p :>>= cnt), ug) = boned $ goMV cnt (p, ug) :>>= go
+        go (debone -> Return x, _) = return x
+        go (debone -> p :>>= cnt, ug) = boned $ goMV cnt (p, ug) :>>= go
         
         goMV cnt (p, ug) = EvoF (fst . suspend p) $ \i ->
             case prepare p i
               of
                 Yd (_, Event t) _ -> case ug
                   of
-                    Just x -> UnGet x (Left t, Nothing)
-                    Nothing -> Nop () (Left t, Nothing)
-                Yd (x, _) next -> Yd x (Right $ cnt next, Nothing)
-                Aw fnext -> Aw $ \x -> (Right . cnt $ fnext x, Just x)
-                M mnext -> M $ mnext >>= \next -> return (Right $ cnt next, ug)
+                    Just x -> UnGet x (return t, Nothing)
+                    Nothing -> Nop () (return t, Nothing)
+                Yd (x, _) next -> Yd x (cnt next, Nothing)
+                Aw fnext -> Aw $ \x -> (cnt $ fnext x, Just x)
+                M mnext -> M $ mnext >>= \next -> return (cnt next, ug)
                 UnGet_ v _ _ -> absurd v
                 Nop v _ -> absurd v
       in
-        go (Right $ runProcessT p0, Nothing)
+        go (unsafeCoerce $ runProcessT p0, Nothing) -- absurd <$> runProcessT p0
 
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
@@ -805,6 +805,8 @@ dSwitchAfter p0 = makeEvo $ \pr0 fr0 ->
                 Yd (x, _) next -> Yd x next
                 Aw fnext -> Aw fnext
                 M mnext -> M mnext
+                UnGet_ v _ _ -> absurd v
+                Nop v _ -> absurd v
       in
         runEvo (finishWith p0) fr
 
