@@ -275,7 +275,7 @@ composeEvo q0 p0 = Evolution $
                     (_, M mq') -> M (mq' >>= \q' -> return (p, cnt q'))
                     (_, Yd o q') -> Yd o (p, cnt q')
                     (M mp', Aw _) -> M (mp' >>= \p' -> return (p', q))
-                    (Yd z p', Aw g) -> M (return (p', cnt $ g z))
+                    (Yd z p', Aw g) -> prepare (goF (p', cnt $ g z)) i
                     (Aw f, Aw _) -> Aw $ (,q) . f 
       in
         go (p0, runEvolution q0)
