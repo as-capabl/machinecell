@@ -207,8 +207,10 @@ runEvo evo fr0 = go (runEvolution evo) Nothing
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
 -- makeEvo f0 = Evolution $ F.F $ \pr0 fr0 -> f0 pr0 $ \evoF -> fr0 $ EvoF (suspend evoF) (\i -> EV (prepare evoF i))
-makeEvo f = Evolution $ f return (\evoF -> boned $ (EvoF (suspend evoF) (\i -> convV (prepare evoF i))) :>>= id)
+makeEvo f = Evolution $ boned $ f Return convF
   where
+    convF evoF = EvoF (suspend evoF) (\i -> convV (prepare evoF i)) :>>= boned
+
     convV (Aw f) = Aw f
     convV (Yd o r) = Yd o r
     convV (M mr) = M mr
@@ -256,7 +258,7 @@ unwrapP pa = case debone (runProcessT pa)
 compositeProc f g = evolve $ composeEvo (finishWith g) f
 
 composeEvo :: forall a b c m. Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
-composeEvo q0 p0 = Evolution $ 
+composeEvo q0 p0 = Evolution $
     let
         go :: (ProcessT m a b, Skeleton (EvoF_UG b c m) Void) -> Skeleton (EvoF_UG a c m) Void
         go pq = boned $ goF pq :>>= go
