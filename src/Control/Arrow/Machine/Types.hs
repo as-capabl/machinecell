@@ -773,18 +773,18 @@ switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 switchAfter p0 = Evolution $
     let
         go (Left x, _) = return x
-        go (Right (debone -> p :>>= cnt), ug) = boned $ goMV (p, ug) :>>= \(eth, ug') -> go (cnt <$> eth, ug')
+        go (Right (debone -> p :>>= cnt), ug) = boned $ goMV cnt (p, ug) :>>= go
         
-        goMV (p, ug) = EvoF (fst . suspend p) $ \i ->
+        goMV cnt (p, ug) = EvoF (fst . suspend p) $ \i ->
             case prepare p i
               of
                 Yd (_, Event t) _ -> case ug
                   of
                     Just x -> UnGet x (Left t, Nothing)
                     Nothing -> M $ return (Left t, Nothing)
-                Yd (x, _) next -> Yd x (Right next, Nothing)
-                Aw fnext -> Aw $ \x -> (Right $ fnext x, Just x)
-                M mnext -> M $ do { next <- mnext; return (Right next, ug) }
+                Yd (x, _) next -> Yd x (Right $ cnt next, Nothing)
+                Aw fnext -> Aw $ \x -> (Right . cnt $ fnext x, Just x)
+                M mnext -> M $ do { next <- mnext; return (Right $ cnt next, ug) }
       in
         go (Right $ runProcessT p0, Nothing)
 
