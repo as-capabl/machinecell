@@ -1253,26 +1253,28 @@ runT ::
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
-runT outpre pa0 l = Fd.foldr frF term l (runProcessT pa0) False
+runT outpre pa0 l = Fd.foldr frF (term False) l (runProcessT pa0)
   where
-    frF _ _ (debone -> Return v) _ = absurd v
-    frF x next (debone -> evoF :>>= cnt) b = case prepare evoF NoEvent
-      of
-        Yd (Event y) p' -> outpre y >> frF x next (cnt p') False
-        Yd NoEvent p' -> frF x next (cnt p') b
-        Yd End p' -> term (cnt p') b
-        M mp' -> do { p' <- mp'; frF x next (cnt p') b } 
-        Aw fp' -> next (cnt $ fp' (Event x)) False
+    frF _ _ (debone -> Return v) = absurd v
+    frF x next (debone -> evoF :>>= cnt) =
+        case prepare evoF NoEvent
+          of
+            Yd (Event y) p' -> outpre y >> frF x next (cnt p')
+            Yd NoEvent p' -> frF x next (cnt p')
+            Yd End p' -> term False (cnt p')
+            M mp' -> do { p' <- mp'; frF x next (cnt p') } 
+            Aw fp' -> next (cnt $ fp' (Event x))
 
-    term (debone -> Return v) _ = absurd v
-    term (debone -> evoF :>>= cnt) b = case prepare evoF End
-      of
-        Yd (Event y) p' -> outpre y >> term (cnt p') False
-        Yd _ p' -> term (cnt p') b
-        M mp' -> do { p' <- mp'; term (cnt p') b }
-        Aw fp' -> if b
-            then return ()
-            else term (cnt $ fp' End) True
+    term _ (debone -> Return v) = absurd v
+    term b (debone -> evoF :>>= cnt) =
+        case prepare evoF End
+          of
+            Yd (Event y) p' -> outpre y >> term False (cnt p')
+            Yd _ p' -> term b (cnt p') 
+            M mp' -> do { p' <- mp'; term b (cnt p') }
+            Aw fp' -> if b
+                then return ()
+                else term True (cnt $ fp' End)
 
 
 type Builder b = FT.F ((,) b)
