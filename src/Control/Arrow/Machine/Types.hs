@@ -190,19 +190,27 @@ newtype Evolution i o m r = Evolution
 
 {-# INLINE [0] runEvo #-}
 runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m x -> x) -> x
-runEvo evo fr0 = go (runEvolution evo) Nothing
+runEvo evo fr0 = go (resolveUG $ runEvolution evo)
   where
-    go (debone -> Return v) _ = absurd v
-    go (debone -> evoF :>>= cnt) ug = fr0 $ EvoF (suspend evoF) $ \i ->
+    go (debone -> Return v) = absurd v
+    go (debone -> evoF :>>= cnt) = fr0 $ go . cnt <$> evoF
+
+resolveUG :: Monad m => Skeleton (EvoF_UG i o m) Void -> Skeleton (EvoF i o m) Void 
+resolveUG skel0 = go (skel0, Nothing)
+  where
+    go pug = boned $ goS pug :>>= go
+
+    goS (debone -> Return v, _) = absurd v
+    goS (debone -> evoF :>>= cnt, ug) = EvoF (suspend evoF) $ \i ->
         case prepare evoF i
           of
             Aw fnext -> case ug
               of
-                Just x -> M . return $ go (cnt (fnext x)) Nothing
-                Nothing -> Aw $ \i2 -> go (cnt (fnext i2)) Nothing
-            Yd x next -> Yd x $ go (cnt next) Nothing
-            M mnext -> M $ do { next <- mnext; return $ go (cnt next) ug }
-            UnGet x next -> M . return $ go (cnt next) (Just x)
+                Just x -> prepare (goS (cnt (fnext x), Nothing)) i
+                Nothing -> Aw $ \i2 -> (cnt (fnext i2), Nothing)
+            Yd x next -> Yd x $ (cnt next, Nothing)
+            M mnext -> M $ do { next <- mnext; return (cnt next, ug) }
+            UnGet x next -> prepare (goS (cnt next, Just x)) i
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
