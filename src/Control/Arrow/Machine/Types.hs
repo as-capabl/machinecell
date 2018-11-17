@@ -154,7 +154,8 @@ data EvoV_ ug i o m a =
     Aw (i -> a) |
     Yd o a |
     M (m a) |
-    UnGet_ !ug i a
+    UnGet_ !ug i a |
+    Nop !ug a
   deriving Functor
 
 type EvoV = EvoV_ Void
@@ -211,6 +212,7 @@ resolveUG skel0 = go (skel0, Nothing)
             Yd x next -> Yd x $ (cnt next, Nothing)
             M mnext -> M $ do { next <- mnext; return (cnt next, ug) }
             UnGet x next -> prepare (goS (cnt next, Just x)) i
+            Nop _ next -> prepare (goS (cnt next, ug)) i 
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
@@ -223,6 +225,7 @@ makeEvo f = Evolution $ boned $ f Return convF
     convV (Yd o r) = Yd o r
     convV (M mr) = M mr
     convV (UnGet_ v _ _) = absurd v
+    convV (Nop v _) = absurd v
 
 instance
     Functor (Evolution i o m)
@@ -266,9 +269,9 @@ unwrapP pa = case debone (runProcessT pa)
 compositeProc f g = evolve $ composeEvo (finishWith g) f
 
 composeEvo :: forall a b c m. Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
-composeEvo q0 p0 = Evolution $
+composeEvo q0 p0 = unsafeCoerce $
     let
-        go :: (ProcessT m a b, Skeleton (EvoF_UG b c m) Void) -> Skeleton (EvoF_UG a c m) Void
+        go :: (ProcessT m a b, Skeleton (EvoF b c m) Void) -> Skeleton (EvoF a c m) Void
         go pq = boned $ goF pq :>>= go
 
         goF (_, debone -> Return v) = absurd v
@@ -286,7 +289,7 @@ composeEvo q0 p0 = Evolution $
                     (Yd z p', Aw g) -> prepare (goF (p', cnt $ g z)) i
                     (Aw f, Aw _) -> Aw $ (,q) . f 
       in
-        go (p0, runEvolution q0)
+        go (p0, resolveUG $ runEvolution q0)
 
 
 {-# RULES
@@ -652,10 +655,11 @@ catchP p recover = Evolution $
                 Yd (collapse -> End) _ -> case lastval
                   of
                     Just x -> UnGet x (Nothing, Nothing)
-                    Nothing -> M $ return (Nothing, Nothing)
+                    Nothing -> Nop () (Nothing, Nothing)
                 Yd x next -> Yd x (Just next, Nothing)
                 M mnext -> M $ do { next <- mnext; return (Just next, lastval) }
                 UnGet x next -> UnGet x (Just next, Nothing)
+                Nop () next -> Nop () (Just next, lastval)
       in
         go (Just $ runEvolution p, Nothing)
 
@@ -781,10 +785,12 @@ switchAfter p0 = Evolution $
                 Yd (_, Event t) _ -> case ug
                   of
                     Just x -> UnGet x (Left t, Nothing)
-                    Nothing -> M $ return (Left t, Nothing)
+                    Nothing -> Nop () (Left t, Nothing)
                 Yd (x, _) next -> Yd x (Right $ cnt next, Nothing)
                 Aw fnext -> Aw $ \x -> (Right . cnt $ fnext x, Just x)
-                M mnext -> M $ do { next <- mnext; return (Right $ cnt next, ug) }
+                M mnext -> M $ mnext >>= \next -> return (Right $ cnt next, ug)
+                UnGet_ v _ _ -> absurd v
+                Nop v _ -> absurd v
       in
         go (Right $ runProcessT p0, Nothing)
 
@@ -850,7 +856,7 @@ g1SwitchAfter pre post pf = Evolution $
         go (pf, runProcessT post, Nothing)
   where
     goRecover (Just x) = UnGet x
-    goRecover Nothing = M . return
+    goRecover Nothing = Nop ()
 
 {-# INLINE dg1SwitchAfter #-}
 dg1SwitchAfter ::
