@@ -1253,17 +1253,26 @@ runT ::
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
-runT outpre pa0 = runEvo (finishWith pa0) frF False . Fd.toList
+runT outpre pa0 l = Fd.foldr frF term l (runProcessT pa0) False
   where
-    frF evoF b l = frV (prepare evoF NoEvent) b l
+    frF _ _ (debone -> Return v) _ = absurd v
+    frF x next (debone -> evoF :>>= cnt) b = case prepare evoF NoEvent
+      of
+        Yd (Event y) p' -> outpre y >> frF x next (cnt p') False
+        Yd NoEvent p' -> frF x next (cnt p') b
+        Yd End p' -> term (cnt p') b
+        M mp' -> do { p' <- mp'; frF x next (cnt p') b } 
+        Aw fp' -> next (cnt $ fp' (Event x)) False
 
-    frV (Yd (Event x) next) _ l = outpre x >> next False l
-    frV (Yd NoEvent next) b l = next b l
-    frV (Yd End next) b _ = next b []
-    frV (M mnext) b l = do { next <- mnext; next b l } 
-    frV (Aw f) False (x:xs) = f (Event x) False xs
-    frV (Aw f) False [] = f End True []
-    frV (Aw _) True _ = return ()
+    term (debone -> Return v) _ = absurd v
+    term (debone -> evoF :>>= cnt) b = case prepare evoF End
+      of
+        Yd (Event y) p' -> outpre y >> term (cnt p') False
+        Yd _ p' -> term (cnt p') b
+        M mp' -> do { p' <- mp'; term (cnt p') b }
+        Aw fp' -> if b
+            then return ()
+            else term (cnt $ fp' End) True
 
 
 type Builder b = FT.F ((,) b)
