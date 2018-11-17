@@ -199,20 +199,20 @@ runEvo evo fr0 = go (resolveUG $ runEvolution evo)
 resolveUG :: Monad m => Skeleton (EvoF_UG i o m) Void -> Skeleton (EvoF i o m) Void 
 resolveUG skel0 = go (skel0, Nothing)
   where
-    go pug = boned $ goS pug :>>= go
+    go pug = boned $ goF pug :>>= go
 
-    goS (debone -> Return v, _) = absurd v
-    goS (debone -> evoF :>>= cnt, ug) = EvoF (suspend evoF) $ \i ->
+    goF (debone -> Return v, _) = absurd v
+    goF (debone -> evoF :>>= cnt, ug) = EvoF (suspend evoF) $ \i ->
         case prepare evoF i
           of
             Aw fnext -> case ug
               of
-                Just x -> prepare (goS (cnt (fnext x), Nothing)) i
+                Just x -> prepare (goF (cnt (fnext x), Nothing)) i
                 Nothing -> Aw $ \i2 -> (cnt (fnext i2), Nothing)
             Yd x next -> Yd x $ (cnt next, Nothing)
             M mnext -> M $ do { next <- mnext; return (cnt next, ug) }
-            UnGet x next -> prepare (goS (cnt next, Just x)) i
-            Nop _ next -> prepare (goS (cnt next, ug)) i 
+            UnGet x next -> prepare (goF (cnt next, Just x)) i
+            Nop _ next -> prepare (goF (cnt next, ug)) i 
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
@@ -1257,21 +1257,23 @@ runT outpre pa0 l = Fd.foldr frF (term False) l (runProcessT pa0)
   where
     frF _ _ (debone -> Return v) = absurd v
     frF x next (debone -> evoF :>>= cnt) =
-        case prepare evoF NoEvent
+        case
+            prepare evoF NoEvent
           of
             Yd (Event y) p' -> outpre y >> frF x next (cnt p')
             Yd NoEvent p' -> frF x next (cnt p')
             Yd End p' -> term False (cnt p')
-            M mp' -> do { p' <- mp'; frF x next (cnt p') } 
+            M mp' -> cnt <$> mp' >>= frF x next 
             Aw fp' -> next (cnt $ fp' (Event x))
 
     term _ (debone -> Return v) = absurd v
     term b (debone -> evoF :>>= cnt) =
-        case prepare evoF End
+        case
+            prepare evoF NoEvent
           of
             Yd (Event y) p' -> outpre y >> term False (cnt p')
             Yd _ p' -> term b (cnt p') 
-            M mp' -> do { p' <- mp'; term b (cnt p') }
+            M mp' -> cnt <$> mp' >>= term b
             Aw fp' -> if b
                 then return ()
                 else term True (cnt $ fp' End)
