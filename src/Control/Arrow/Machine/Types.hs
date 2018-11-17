@@ -283,9 +283,9 @@ composeEvo q0 p0 = unsafeCoerce $
               in
                 EV $ case (vP, vQ)
                   of
-                    (_, M mq') -> M (mq' >>= \q' -> return (p, cnt q'))
+                    (_, M mq') -> M $ (p,) . cnt <$> mq'
                     (_, Yd o q') -> Yd o (p, cnt q')
-                    (M mp', Aw _) -> M (mp' >>= \p' -> return (p', q))
+                    (M mp', Aw _) -> M $ (,q) <$> mp'
                     (Yd z p', Aw g) -> prepare (goF (p', cnt $ g z)) i
                     (Aw f, Aw _) -> Aw $ (,q) . f 
       in
@@ -297,14 +297,11 @@ composeEvo q0 p0 = unsafeCoerce $
 #-}
 {-# INLINE[0] evolve #-}
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
-evolve evo = ProcessT . boned $ runEvo evo (\evoP -> evoP :>>= boned)
+evolve = ProcessT . resolveUG . runEvolution
 
 {-# INLINE[0] finishWith #-}
 finishWith :: Monad m => ProcessT m i o -> Evolution i o m a
-finishWith pa0 = makeEvo $ \_ fr0 -> go fr0 pa0
-  where
-    go fr0 pa = fr0 $ EvoF (suspend (unwrapP pa)) $ \i ->
-        go fr0 <$> prepare (unwrapP pa) i
+finishWith pa0 = unsafeCoerce pa0
 
 
 
