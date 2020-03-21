@@ -129,6 +129,7 @@ where
 
 import qualified Control.Category as Cat
 import Data.Profunctor (Profunctor, dimap, rmap, lmap)
+import Data.Functor.Apply
 import Data.Void
 import Data.Maybe (fromMaybe)
 import Control.Arrow
@@ -137,12 +138,16 @@ import Control.Monad.Trans
 import Control.Monad.Identity
 import Control.Monad.Skeleton
 import Control.Applicative
+import Control.Comonad
 import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup ((<>)))
+import Control.Monad.Trans.Free.Church (FT ())
 import qualified Control.Monad.Trans.Free.Church as FT
 import Control.Monad.Free.Church (F ())
-import Control.Monad.Free.Church as F
+import qualified Control.Monad.Free.Church as F
+import Control.Comonad.Cofree (Cofree (..))
+import qualified Control.Comonad.Cofree as F
 import Control.Monad.Free
 import qualified Control.Monad.Free as Free
 import GHC.Exts (build)
@@ -150,19 +155,14 @@ import Unsafe.Coerce
 
 import Control.Arrow.Machine.Internal.Event
 
-data EvoV_ ug i o m a =
+data EvoV_ i o m a =
     Aw (i -> a) |
     Yd o a |
-    M (m a) |
-    UnGet_ !ug i a |
-    Nop !ug a
+    M (m a)
   deriving Functor
 
-type EvoV = EvoV_ Void
-type EvoV_UG = EvoV_ ()
-
-pattern EV fx = fx
-pattern UnGet i x = UnGet_ () i x 
+type EvoV = EvoV_
+type EvoV_UG = EvoV_
 
 data EvoF' evoV i o m a = EvoF
   {
@@ -176,9 +176,19 @@ data EvoF' evoV i o m a = EvoF
 type EvoF = EvoF' EvoV
 type EvoF_UG = EvoF' EvoV_UG
 
+type UGStack i = F.Cofree ((->) i)
+
+ugPure :: a -> UGStack i a
+ugPure x = F.coiter const x
+
+ugSequence :: Functor f => f (UGStack i a) -> UGStack i (f a)
+ugSequence fux = (extract <$> fux) :< (ugSequence <$> fgswap (F.unwrap <$> fux))
+  where
+    fgswap fx = \ug -> ($ug) <$> fx
+
 newtype Evolution i o m r = Evolution 
   {
-    runEvolution :: Skeleton (EvoF_UG i o m) r
+    runEvolution :: FT (EvoF_UG i o m) (UGStack i) r
   }
 
 {-# RULES
@@ -190,12 +200,10 @@ newtype Evolution i o m r = Evolution
 #-}
 
 {-# INLINE [0] runEvo #-}
-runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m x -> x) -> x
-runEvo evo fr0 = go (resolveUG $ runEvolution evo)
-  where
-    go (debone -> Return v) = absurd v
-    go (debone -> evoF :>>= cnt) = fr0 $ go . cnt <$> evoF
+runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m r -> r) -> r
+runEvo evo fr0 = extract (FT.runFT (runEvolution evo) absurd (\xr fx -> fr0 <$> ugSequence (xr <$> fx)))
 
+{-
 resolveUG :: Monad m => Skeleton (EvoF_UG i o m) Void -> Skeleton (EvoF i o m) Void 
 resolveUG skel0 = go (skel0, Nothing)
   where
@@ -213,19 +221,11 @@ resolveUG skel0 = go (skel0, Nothing)
             M mnext -> M $ do { next <- mnext; return (cnt next, ug) }
             UnGet x next -> prepare (goF (cnt next, Just x)) i
             Nop _ next -> prepare (goF (cnt next, ug)) i 
+-}
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
--- makeEvo f0 = Evolution $ F.F $ \pr0 fr0 -> f0 pr0 $ \evoF -> fr0 $ EvoF (suspend evoF) (\i -> EV (prepare evoF i))
-makeEvo f = Evolution $ boned $ f Return convF
-  where
-    convF evoF = EvoF (suspend evoF) (\i -> convV (prepare evoF i)) :>>= boned
-
-    convV (Aw f) = Aw f
-    convV (Yd o r) = Yd o r
-    convV (M mr) = M mr
-    convV (UnGet_ v _ _) = absurd v
-    convV (Nop v _) = absurd v
+makeEvo f = Evolution $ FT.FT $ \pr fr -> f pr (fr id)
 
 instance
     Functor (Evolution i o m)
@@ -248,7 +248,7 @@ instance
     MonadTrans (Evolution i o)
   where
     {-# INLINE lift #-}
-    lift ma = Evolution $ bone $ EvoF (const noEvent) (\_ -> EV (M ma)) 
+    lift ma = Evolution $ F.wrap $ EvoF (const noEvent) (\_ -> M (return <$> ma))
 
 -- | The stream transducer arrow.
 --
@@ -269,7 +269,7 @@ unwrapP pa = case debone (runProcessT pa)
 compositeProc f g = evolve $ composeEvo (finishWith g) f
 
 composeEvo :: forall a b c m. Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
-composeEvo q0 p0 = unsafeCoerce $
+composeEvo q0 p0 = undefined {- unsafeCoerce $
     let
         go :: (ProcessT m a b, Skeleton (EvoF b c m) Void) -> Skeleton (EvoF a c m) Void
         go pq = boned $ goF pq :>>= go
@@ -290,18 +290,21 @@ composeEvo q0 p0 = unsafeCoerce $
                     (Aw f, Aw _) -> Aw $ (,q) . f 
       in
         go (p0, resolveUG $ runEvolution q0)
-
+-}
 
 {-# RULES
     "evolve/finishWith" forall p. evolve (finishWith p) = p
 #-}
 {-# INLINE[0] evolve #-}
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
-evolve = ProcessT . resolveUG . runEvolution
+evolve evo = ProcessT $ runEvo evo (\fx -> boned (fx :>>= id))
 
 {-# INLINE[0] finishWith #-}
 finishWith :: Monad m => ProcessT m i o -> Evolution i o m a
-finishWith pa0 = unsafeCoerce pa0
+finishWith (ProcessT pa0) = makeEvo $ \pr fr -> deboneBy (go pr fr) pa0
+  where
+    go pr _ (Return x) = pr (absurd x)
+    go pr fr (fx :>>= xr) = fr (deboneBy (go pr fr) . xr <$> fx)
 
 
 
@@ -604,12 +607,12 @@ instance
     {-# INLINE await #-}
     await = Evolution go
       where
-        go = boned $ goMV :>>= fromMaybe go
+        go = undefined {-boned $ goMV :>>= fromMaybe go
         
         goMV = EvoF (const noEvent) $ \_ -> Aw $ \case
             Event x -> Just $ return x
             NoEvent -> Nothing
-            End -> Just $ runEvolution stop
+            End -> Just $ runEvolution stop-}
 
 
 class
@@ -621,7 +624,7 @@ instance
     Monad m => MonadYield (Evolution i (Event a) m) a
   where
     {-# INLINE yield #-}
-    yield x = Evolution $ bone $ EvoF (const noEvent) $ \_ -> EV $ Yd (Event x) ()
+    yield x = Evolution $ F.wrap $ EvoF (const noEvent) $ \_ -> Yd (Event x) (return ())
           
 
 class
@@ -639,7 +642,7 @@ instance
 
 catchP:: (Monad m, Occasional' o) =>
     Evolution i o m a -> Evolution i o m a -> Evolution i o m a
-catchP p recover = Evolution $
+catchP p recover = undefined {- Evolution $
     let 
         go (Just (debone -> Return x), _) = return x
         go (Just (debone -> pstep :>>= cnt), lastval) = boned $ goMV pstep lastval :>>= \(x, lv') -> go (cnt <$> x, lv') 
@@ -659,6 +662,7 @@ catchP p recover = Evolution $
                 Nop () next -> Nop () (Just next, lastval)
       in
         go (Just $ runEvolution p, Nothing)
+-}
 
 {-
 catchP (PlanT pl) next0 =
@@ -771,7 +775,7 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 -- Switches
 --
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-switchAfter p0 = Evolution $
+switchAfter p0 = undefined {- Evolution $
     let
         go (debone -> Return x, _) = return x
         go (debone -> p :>>= cnt, ug) = boned $ goMV cnt (p, ug) :>>= go
@@ -790,10 +794,10 @@ switchAfter p0 = Evolution $
                 Nop v _ -> absurd v
       in
         go (unsafeCoerce $ runProcessT p0, Nothing) -- absurd <$> runProcessT p0
-
+-}
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-dSwitchAfter p0 = makeEvo $ \pr0 fr0 ->
+dSwitchAfter p0 = undefined {-makeEvo $ \pr0 fr0 ->
     let
         fr p = fr0 $ EvoF (fst . suspend p) $ \i ->
             case prepare p i
@@ -806,6 +810,7 @@ dSwitchAfter p0 = makeEvo $ \pr0 fr0 ->
                 Nop v _ -> absurd v
       in
         runEvo (finishWith p0) fr
+-}
 
 {-# INLINE kSwitchAfter #-}
 kSwitchAfter ::
@@ -830,7 +835,7 @@ g1SwitchAfter ::
     ProcessT m (i, q) (o, Event t) ->
     ProcessT m p q ->
     Evolution i o m (ProcessT m p q, t)
-g1SwitchAfter pre post pf = Evolution $ 
+g1SwitchAfter pre post pf = undefined {- Evolution $ 
     let
         go (_, debone -> Return v, _) = absurd v
         go (p, qskel @ (debone -> q :>>= cnt), lv) = boned $ goMV (p, cnt <$> q, lv) :>>= \case
@@ -856,6 +861,7 @@ g1SwitchAfter pre post pf = Evolution $
   where
     goRecover (Just x) = UnGet x
     goRecover Nothing = Nop ()
+-}
 
 {-# INLINE dg1SwitchAfter #-}
 dg1SwitchAfter ::
