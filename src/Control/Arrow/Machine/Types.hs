@@ -179,7 +179,7 @@ type EvoF_UG = EvoF' EvoV_UG
 type UGStack i = F.Cofree ((->) i)
 
 ugPure :: a -> UGStack i a
-ugPure x = F.coiter const x
+ugPure = F.coiter const
 
 ugSequence :: Functor f => f (UGStack i a) -> UGStack i (f a)
 ugSequence fux = (extract <$> fux) :< (ugSequence <$> fgswap (F.unwrap <$> fux))
@@ -188,7 +188,7 @@ ugSequence fux = (extract <$> fux) :< (ugSequence <$> fgswap (F.unwrap <$> fux))
 
 newtype Evolution i o m r = Evolution 
   {
-    runEvolution :: FT (EvoF_UG i o m) (UGStack i) r
+    runEvolution :: FT (EvoF i o m) (UGStack i) r
   }
 
 {-# RULES
@@ -269,7 +269,26 @@ unwrapP pa = case debone (runProcessT pa)
 compositeProc f g = evolve $ composeEvo (finishWith g) f
 
 composeEvo :: forall a b c m. Monad m => Evolution b c m Void -> ProcessT m a b -> Evolution a c m Void
-composeEvo q0 p0 = undefined {- unsafeCoerce $
+composeEvo q0 p0 = makeEvo $ \_ fr0 ->
+    let
+        goF p evoF = EvoF (suspend evoF . suspend (unwrapP p)) $ \i ->
+            let
+                susX = suspend (unwrapP p) i
+                vQ = prepare evoF susX
+                vP = prepare (unwrapP p) i
+              in
+                case (vP, vQ)
+                  of
+                    (_, M mq') -> M $ ($p) <$> mq'
+                    (_, Yd o q') -> Yd o (q' p)
+                    (M mp', Aw _) -> M $ go evoF <$> mp'
+                    (Yd z p', Aw g) -> M $ return $ g z p'
+                    (Aw f, Aw _) -> Aw $ go evoF . f
+        go evoF p = fr0 (goF p evoF)
+      in
+        runEvo q0 go p0
+
+{- unsafeCoerce $
     let
         go :: (ProcessT m a b, Skeleton (EvoF b c m) Void) -> Skeleton (EvoF a c m) Void
         go pq = boned $ goF pq :>>= go
@@ -605,15 +624,14 @@ instance
     MonadAwait (Evolution (Event a) o m) a
   where
     {-# INLINE await #-}
-    await = Evolution go
-      where
-        go = undefined {-boned $ goMV :>>= fromMaybe go
-        
-        goMV = EvoF (const noEvent) $ \_ -> Aw $ \case
-            Event x -> Just $ return x
-            NoEvent -> Nothing
-            End -> Just $ runEvolution stop-}
-
+    await = Evolution $ FT.FT $ \pr fr ->
+        let
+            doAw = fr unEv $ EvoF (const noEvent) $ \_ -> Aw id
+            unEv (Event a) = pr a
+            unEv NoEvent = doAw
+            unEv End = FT.runFT (runEvolution stop) pr fr
+          in
+            extract doAw :< unEv
 
 class
     MonadYield m a | m -> a
@@ -624,8 +642,9 @@ instance
     Monad m => MonadYield (Evolution i (Event a) m) a
   where
     {-# INLINE yield #-}
-    yield x = Evolution $ F.wrap $ EvoF (const noEvent) $ \_ -> Yd (Event x) (return ())
-          
+    yield x = Evolution $ F.wrap $ EvoF (const noEvent) $ \_ -> Yd (Event x) ugBarrier
+      where
+        ugBarrier = FT.FT $ \pr _ -> ugPure . extract $ pr ()
 
 class
     MonadStop m
@@ -775,42 +794,32 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 -- Switches
 --
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-switchAfter p0 = undefined {- Evolution $
+switchAfter p0 = Evolution $ FT.FT $ \pr fr ->
     let
-        go (debone -> Return x, _) = return x
-        go (debone -> p :>>= cnt, ug) = boned $ goMV cnt (p, ug) :>>= go
-        
-        goMV cnt (p, ug) = EvoF (fst . suspend p) $ \i ->
-            case prepare p i
+        go (debone -> Return x) = absurd x
+        go (debone -> EvoF sus prep :>>= cnt) = fr id $ EvoF (fst . sus) $ \i ->
+            case prep i
               of
-                Yd (_, Event t) _ -> case ug
-                  of
-                    Just x -> UnGet x (return t, Nothing)
-                    Nothing -> Nop () (return t, Nothing)
-                Yd (x, _) next -> Yd x (cnt next, Nothing)
-                Aw fnext -> Aw $ \x -> (cnt $ fnext x, Just x)
-                M mnext -> M $ mnext >>= \next -> return (cnt next, ug)
-                UnGet_ v _ _ -> absurd v
-                Nop v _ -> absurd v
+                Aw f -> Aw (\x -> let u = F.unwrap (go . cnt $ f x) x in extract u :< const u)
+                Yd (y, Event t) _ -> M (return $ pr t)
+                Yd (y, _) r -> Yd y (go . cnt $ r)
+                M mr -> M (go . cnt <$> mr)
       in
-        go (unsafeCoerce $ runProcessT p0, Nothing) -- absurd <$> runProcessT p0
--}
+        go (runProcessT p0)
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-dSwitchAfter p0 = undefined {-makeEvo $ \pr0 fr0 ->
+dSwitchAfter p0 = Evolution $ FT.FT $ \pr fr ->
     let
-        fr p = fr0 $ EvoF (fst . suspend p) $ \i ->
-            case prepare p i
+        go (debone -> Return x) = absurd x
+        go (debone -> EvoF sus prep :>>= cnt) = fr id $ EvoF (fst . sus) $ \i ->
+            case prep i
               of
-                Yd (x, Event t) _ -> Yd x (pr0 t)
-                Yd (x, _) next -> Yd x next
-                Aw fnext -> Aw fnext
-                M mnext -> M mnext
-                UnGet_ v _ _ -> absurd v
-                Nop v _ -> absurd v
+                Aw f -> Aw (\x -> go . cnt $ f x)
+                Yd (y, Event t) _ -> Yd y (pr t)
+                Yd (y, _) r -> Yd y (go . cnt $ r)
+                M mr -> M (go . cnt <$> mr)
       in
-        runEvo (finishWith p0) fr
--}
+        go (runProcessT p0)
 
 {-# INLINE kSwitchAfter #-}
 kSwitchAfter ::
