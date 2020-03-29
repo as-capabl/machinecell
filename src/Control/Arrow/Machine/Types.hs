@@ -225,13 +225,18 @@ resolveUG skel0 = go (skel0, Nothing)
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
-makeEvo f = Evolution $ FT.FT $ \pr fr0 -> f pr (fr fr0)
-  where
-    fr fr0 evoF = fr0 id $ EvoF (suspend evoF) $ \i -> case prepare evoF i
-      of
-        Aw f -> Aw $ \x -> extract (f x) :< f
-        Yd y r -> Yd y (ugPure $ extract r)
-        M mr -> M mr
+makeEvo f = Evolution $ FT.FT $ \pr fr0 -> f pr (fr0 id)
+
+aw_ :: (i -> o) -> (i -> a) -> Evolution i o m a
+aw_ sus f = Evolution $ FT.FT $ \pr fr ->
+    let
+        r = fr pr (EvoF sus $ \_ -> Aw f)
+      in
+        extract r :< pr . f
+
+yd_ :: (i -> o) -> o -> Evolution i o m ()
+yd_ sus x = Evolution $ FT.FT $ \pr fr ->
+    ugPure . extract $ fr pr (EvoF sus $ \_ -> Yd x ())
 
 instance
     Functor (Evolution i o m)
@@ -418,22 +423,11 @@ instance
 
 {-# INLINE [1] idProc #-}
 idProc :: Monad m => ProcessT m a a
-idProc = evolve $ makeEvo $ \_ fr -> go fr
-    where
-        go fr = 
-            fr $ EvoF id $ \_ -> Aw $ \x ->
-            fr $ EvoF id $ \_ -> Yd x $
-            go fr
-
+idProc = evolve $ forever $ aw_ id id >>= yd_ id
 
 {-# INLINE [1] arrProc #-}
 arrProc :: Monad m => (a -> b) -> ProcessT m a b
-arrProc f0 = evolve $ makeEvo $ \_ fr -> go f0 fr
-    where
-      go f fr = 
-          fr $ EvoF f $ \_ -> Aw $ \x ->
-          fr $ EvoF f $ \_ -> Yd (f x) $
-          go f fr
+arrProc f0 = evolve $ forever $ aw_ f0 f0 >>= yd_ f0
 
 {-# INLINE [1] parProc #-}
 parProc :: Monad m =>
@@ -630,14 +624,14 @@ instance
     MonadAwait (Evolution (Event a) o m) a
   where
     {-# INLINE await #-}
-    await = makeEvo $ \pr fr ->
+    await = Evolution $ FT.FT $ \pr fr ->
         let
-            doAw = fr (EvoF (const noEvent) $ \_ -> Aw unEv)
-            unEv (Event a) = pr a
-            unEv NoEvent = doAw
-            unEv End = runEvo stop fr
+            r = fr doAw (EvoF (const noEvent) $ \_ -> Aw id)
+            doAw (Event x) = pr x
+            doAw NoEvent = r
+            doAw End = FT.runFT (runEvolution stop) pr fr
           in
-            doAw
+            extract r :< doAw
 
 class
     MonadYield m a | m -> a
@@ -648,7 +642,7 @@ instance
     Monad m => MonadYield (Evolution i (Event a) m) a
   where
     {-# INLINE yield #-}
-    yield x = makeEvo $ \pr fr -> fr $ EvoF (const noEvent) $ \_ -> Yd (Event x) (pr ())
+    yield = yd_ (const NoEvent) . Event
 
 class
     MonadStop m
@@ -804,12 +798,15 @@ switchAfter p0 = Evolution $ FT.FT $ \pr fr ->
         go (debone -> EvoF sus prep :>>= cnt) = fr id $ EvoF (fst . sus) $ \i ->
             case prep i
               of
-                Aw f -> Aw (\x -> let u = F.unwrap (go . cnt $ f x) x in extract u :< const u)
+                Aw f -> Aw $ \x -> guardUnget $ unget x (go . cnt $ f x)
                 Yd (y, Event t) _ -> M (return $ pr t)
                 Yd (y, _) r -> Yd y (go . cnt $ r)
                 M mr -> M (go . cnt <$> mr)
+        unget x r = F.unwrap r x
+        guardUnget r = extract r :< const r
+        peelGuard r = extract r :< \x -> unget x $ unget x r
       in
-        go (runProcessT p0)
+        peelGuard $ go (runProcessT p0)
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 dSwitchAfter p0 = Evolution $ FT.FT $ \pr fr ->
