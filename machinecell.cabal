@@ -42,7 +42,12 @@ library
         Control.Arrow.Machine.Misc.Discrete
   other-extensions:    FlexibleInstances, Arrows, RankNTypes, TypeSynonymInstances, MultiParamTypeClasses, GADTs, FlexibleContexts, NoMonomorphismRestriction, RecursiveDo
   ghc-options: -Wall
-  build-depends:       base >=4.8 && <5.0, mtl >=2.2.1 && <3, free >=4.12.3 && <5.1, semigroups >=0.18.1 && <1, profunctors >=5.2 && <6, transformers >=0.5.0.0 && <1
+  build-depends:       base >=4.8 && <5.0
+                     , mtl >=2.2.1 && <3
+                     , free >=4.12.3 && <6
+                     , semigroups >=0.18.1 && <1
+                     , profunctors >=5.2 && <6
+                     , transformers >=0.5.0.0 && <1
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -64,14 +69,24 @@ Test-suite spec
                        Types.StepExecutionSpec,
                        Utils.SourceSpec,
                        Misc.PumpSpec
-  Build-depends:       base >=4.0 && <5.0, mtl >=2.2.1, profunctors >=5.2, QuickCheck >=1.0, hspec >=0.2.0, semigroups >=0.18.1, machinecell
+  build-depends:       base >=4.0 && <5.0, mtl >=2.2.1, profunctors >=5.2, QuickCheck >=1.0, hspec >=0.2.0, semigroups >=0.18.1, machinecell
+  build-tool-depends:  hspec-discover:hspec-discover
 
 Test-suite doctest
   type:                exitcode-stdio-1.0
   default-language:    Haskell2010
   hs-source-dirs:      test
   main-is:             doctest.hs
-  Build-depends:       base >=4.0 && <5.0, doctest >=0.3.0
+  build-depends:       base >=4.8 && <5.0
+                     , mtl >=2.2.1 && <3
+                     , free >=4.12.3 && <6.0
+                     , semigroups >=0.18.1 && <1
+                     , semigroupoids
+                     , comonad
+                     , profunctors >=5.2 && <6
+                     , transformers >=0.5.0.0 && <1
+                     , doctest >=0.3.0
+  build-tool-depends: doctest-discover:doctest-discover
 
 source-repository head
   type:        git
