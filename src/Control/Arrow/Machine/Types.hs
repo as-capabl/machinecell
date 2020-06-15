@@ -827,7 +827,10 @@ dSwitchAfter p0 = Evolution $ FT.FT $ \pr fr ->
         go (debone -> EvoF sus prep :>>= cnt) = fr id $ EvoF (fst . sus) $ \i ->
             case prep i
               of
-                Aw f -> Aw (\x -> go . cnt $ f x)
+                Aw f -> M . return $
+                    extract (fr id $ EvoF (fst . sus) $ \_ ->
+                        Aw (\x -> go (cnt $ f x)))
+                    :< go . cnt . f
                 Yd (y, Event t) _ -> Yd y (pr t)
                 Yd (y, _) r -> Yd y (go . cnt $ r)
                 M mr -> M (go . cnt <$> mr)
