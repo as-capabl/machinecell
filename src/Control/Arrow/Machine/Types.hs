@@ -225,7 +225,16 @@ resolveUG skel0 = go (skel0, Nothing)
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
-makeEvo f = Evolution $ FT.FT $ \pr fr0 -> f pr (fr0 id)
+makeEvo f = Evolution $ FT.FT $ \pr fr0 -> f pr (fr fr0)
+  where
+    fr fr0 evoF = fr0 id $ EvoF (suspend evoF) $ \i -> case prepare evoF i
+      of
+        Aw f -> M . return $
+            extract (fr0 id $ EvoF (suspend evoF) (\_ -> Aw (ugPure . extract . f)))
+            :< f
+        Yd y r -> Yd y (ugPure $ extract r)
+        M mr -> M mr
+
 
 aw_ :: (i -> o) -> (i -> a) -> Evolution i o m a
 aw_ sus f = Evolution $ FT.FT $ \pr fr ->
@@ -794,19 +803,22 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 switchAfter p0 = Evolution $ FT.FT $ \pr fr ->
     let
-        go (debone -> Return x) = absurd x
-        go (debone -> EvoF sus prep :>>= cnt) = fr id $ EvoF (fst . sus) $ \i ->
+        go _ (debone -> Return x) = absurd x
+        go mleft (debone -> EvoF sus prep :>>= cnt) = fr id $ EvoF (fst . sus) $ \i ->
             case prep i
               of
-                Aw f -> Aw $ \x -> guardUnget $ unget x (go . cnt $ f x)
-                Yd (y, Event t) _ -> M (return $ pr t)
-                Yd (y, _) r -> Yd y (go . cnt $ r)
-                M mr -> M (go . cnt <$> mr)
-        unget x r = F.unwrap r x
-        guardUnget r = extract r :< const r
-        peelGuard r = extract r :< \x -> unget x $ unget x r
+                Aw f -> M . return $
+                    extract (fr id $ EvoF (fst . sus) (\_ ->
+                        Aw (\x -> go (Just x) (cnt $ f x))))
+                    :< go Nothing . cnt . f
+                Yd (_, Event t) _ -> M . return $ case mleft
+                  of
+                    Just x -> F.unwrap (pr t) x
+                    Nothing -> pr t
+                Yd (y, _) r -> Yd y $ go Nothing (cnt r)
+                M mr -> M (go mleft . cnt <$> mr)
       in
-        peelGuard $ go (runProcessT p0)
+        go Nothing (runProcessT p0)
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 dSwitchAfter p0 = Evolution $ FT.FT $ \pr fr ->
