@@ -819,22 +819,17 @@ switchAfter p0 = Evolution $ FT.FT $ \pr fr ->
         go Nothing (runProcessT p0)
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-dSwitchAfter p0 = Evolution $ FT.FT $ \pr fr ->
+dSwitchAfter p0 = Evolution $ FT.FT $ \pr0 fr0 ->
     let
-        go (debone -> Return x) = absurd x
-        go (debone -> EvoF sus prep :>>= cnt) = fr id $ EvoF (fst . sus) $ \i ->
+        fr' pr fr xmr (EvoF sus prep) = fr id $ EvoF (fst . sus) $ \i ->
             case prep i
               of
-                Aw f -> M . return $
-                    UGStack
-                        (extract (fr id $ EvoF (fst . sus) $ \_ ->
-                            Aw (\x -> go (cnt $ f x))))
-                        (extract . go . cnt . f)
+                Aw f -> Aw (xmr . f)
                 Yd (y, Event t) _ -> Yd y (pr t)
-                Yd (y, _) r -> Yd y (go . cnt $ r)
-                M mr -> M (go . cnt <$> mr)
+                Yd (y, _) x -> Yd y (xmr x)
+                M mx -> M (xmr <$> mx)
       in
-        go (runProcessT p0)
+        FT.runFT (runEvolution (finishWith p0)) absurd (fr' pr0 fr0)
 
 {-# INLINE kSwitchAfter #-}
 kSwitchAfter ::
