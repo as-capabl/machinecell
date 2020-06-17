@@ -329,7 +329,8 @@ composeEvo q0 p0 = makeEvo $ \_ fr0 ->
 -}
 
 {-# RULES
-    "evolve/finishWith" forall p. evolve (finishWith p) = p
+"evolve/finishWith" forall p. evolve (finishWith p) = p
+"finishWith/evolve" forall e. finishWith (evolve e) = e
 #-}
 {-# INLINE[0] evolve #-}
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
@@ -798,25 +799,17 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 -- Switches
 --
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-switchAfter p0 = Evolution $ FT.FT $ \pr fr ->
+switchAfter p0 = Evolution $ FT.FT $ \pr0 fr0 ->
     let
-        go _ (debone -> Return x) = absurd x
-        go mleft (debone -> EvoF sus prep :>>= cnt) = fr id $ EvoF (fst . sus) $ \i ->
+        fr' pr fr xmr (EvoF sus prep) = ugSequence $ \mu -> fr id $ EvoF (fst . sus) $ \i ->
             case prep i
               of
-                Aw f -> M . return $
-                    UGStack
-                        (extract (fr id $ EvoF (fst . sus) (\_ ->
-                            Aw (\x -> go (Just x) (cnt $ f x)))))
-                        (extract . go Nothing . cnt . f)
-                Yd (_, Event t) _ -> M . return $ case mleft
-                  of
-                    Just x -> ugPure $ unGet (pr t) x
-                    Nothing -> pr t
-                Yd (y, _) r -> Yd y $ go Nothing (cnt r)
-                M mr -> M (go mleft . cnt <$> mr)
+                Aw f -> Aw $ \i -> ($ Just i) <$> xmr (f i)
+                Yd (y, Event t) _ -> M . return $ extend (elimUG `flip` mu) (pr t)
+                Yd (y, _) x -> Yd y $ ($ Nothing) <$> xmr x
+                M mx -> M ((fmap ($mu) . xmr) <$> mx)
       in
-        go Nothing (runProcessT p0)
+        ($ Nothing) <$> FT.runFT (runEvolution (finishWith p0)) absurd (fr' pr0 fr0)
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
 dSwitchAfter p0 = Evolution $ FT.FT $ \pr0 fr0 ->
