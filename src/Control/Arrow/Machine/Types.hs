@@ -172,76 +172,73 @@ data EvoF' evoV i o m a = EvoF
   deriving Functor
 
 -- type role EvoF' representational representational representational representational representational
-  
+
 type EvoF = EvoF' EvoV
 type EvoF_UG = EvoF' EvoV_UG
 
-type UGStack i = F.Cofree ((->) i)
+data UGStack i a = UGStack
+  {
+    accept :: a,
+    unGet :: i -> a
+  }
+    deriving Functor
+
+instance Comonad (UGStack i)
+  where
+    extract = accept
+    duplicate wa = UGStack wa (ugPure . unGet wa)
 
 ugPure :: a -> UGStack i a
-ugPure = F.coiter const
+ugPure x = UGStack x (const x)
+
+makeUG :: (Maybe i -> a) -> UGStack i a
+makeUG f = UGStack (f Nothing) (f . Just)
+
+elimUG :: UGStack i a -> Maybe i -> a
+elimUG s Nothing = extract s
+elimUG s (Just x) = unGet s x
 
 ugSequence :: Functor f => f (UGStack i a) -> UGStack i (f a)
-ugSequence fux = (extract <$> fux) :< (ugSequence <$> fgswap (F.unwrap <$> fux))
-  where
-    fgswap fx = \ug -> ($ug) <$> fx
+ugSequence fux = makeUG $ \mu -> (elimUG `flip` mu) <$> fux
 
-newtype Evolution i o m r = Evolution 
+newtype Evolution i o m r = Evolution
   {
     runEvolution :: FT (EvoF i o m) (UGStack i) r
   }
 
 {-# RULES
-    "runEvo/makeEvo"
+"runEvo/makeEvo"
         forall
             (s :: forall r. (Void -> r) -> (EvoF i o m r -> r) -> r)
             (fr :: forall r. EvoF i o m r -> r).
                 runEvo (makeEvo s) fr = s absurd fr
+"makeEvo/runEvo"
+        forall e.
+            makeEvo (\_ fr -> runEvo e fr) = e
 #-}
 
 {-# INLINE [0] runEvo #-}
 runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m r -> r) -> r
 runEvo evo fr0 = extract (FT.runFT (runEvolution evo) absurd (\xr fx -> fr0 <$> ugSequence (xr <$> fx)))
 
-{-
-resolveUG :: Monad m => Skeleton (EvoF_UG i o m) Void -> Skeleton (EvoF i o m) Void 
-resolveUG skel0 = go (skel0, Nothing)
-  where
-    go pug = boned $ goF pug :>>= go
-
-    goF (debone -> Return v, _) = absurd v
-    goF (debone -> evoF :>>= cnt, ug) = EvoF (suspend evoF) $ \i ->
-        case prepare evoF i
-          of
-            Aw fnext -> case ug
-              of
-                Just x -> prepare (goF (cnt (fnext x), Nothing)) i
-                Nothing -> Aw $ \i2 -> (cnt (fnext i2), Nothing)
-            Yd x next -> Yd x $ (cnt next, Nothing)
-            M mnext -> M $ do { next <- mnext; return (cnt next, ug) }
-            UnGet x next -> prepare (goF (cnt next, Just x)) i
-            Nop _ next -> prepare (goF (cnt next, ug)) i 
--}
-
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
 makeEvo f = Evolution $ FT.FT $ \pr fr0 -> f pr (fr fr0)
   where
-    fr fr0 evoF = fr0 id $ EvoF (suspend evoF) $ \i -> case prepare evoF i
+    fr fr0 evoF = makeUG $ \mu -> extract $ fr0 id $ EvoF (suspend evoF) $ \i -> case prepare evoF i
       of
-        Aw f -> M . return $
-            extract (fr0 id $ EvoF (suspend evoF) (\_ -> Aw (ugPure . extract . f)))
-            :< f
-        Yd y r -> Yd y (ugPure $ extract r)
-        M mr -> M mr
-
+        Aw f -> case mu of
+            Nothing -> Aw f
+            Just u -> M . return $ f u
+        Yd y r -> Yd y r
+        M mr -> M $ extend (elimUG `flip` mu) <$> mr
 
 aw_ :: (i -> o) -> (i -> a) -> Evolution i o m a
 aw_ sus f = Evolution $ FT.FT $ \pr fr ->
     let
         r = fr pr (EvoF sus $ \_ -> Aw f)
       in
-        extract r :< pr . f
+        UGStack (extract r) (extract . pr . f)
 
 yd_ :: (i -> o) -> o -> Evolution i o m ()
 yd_ sus x = Evolution $ FT.FT $ \pr fr ->
@@ -640,7 +637,7 @@ instance
             doAw NoEvent = r
             doAw End = FT.runFT (runEvolution stop) pr fr
           in
-            extract r :< doAw
+            UGStack (extract r) (extract . doAw)
 
 class
     MonadYield m a | m -> a
@@ -808,12 +805,13 @@ switchAfter p0 = Evolution $ FT.FT $ \pr fr ->
             case prep i
               of
                 Aw f -> M . return $
-                    extract (fr id $ EvoF (fst . sus) (\_ ->
-                        Aw (\x -> go (Just x) (cnt $ f x))))
-                    :< go Nothing . cnt . f
+                    UGStack
+                        (extract (fr id $ EvoF (fst . sus) (\_ ->
+                            Aw (\x -> go (Just x) (cnt $ f x)))))
+                        (extract . go Nothing . cnt . f)
                 Yd (_, Event t) _ -> M . return $ case mleft
                   of
-                    Just x -> F.unwrap (pr t) x
+                    Just x -> ugPure $ unGet (pr t) x
                     Nothing -> pr t
                 Yd (y, _) r -> Yd y $ go Nothing (cnt r)
                 M mr -> M (go mleft . cnt <$> mr)
@@ -828,9 +826,10 @@ dSwitchAfter p0 = Evolution $ FT.FT $ \pr fr ->
             case prep i
               of
                 Aw f -> M . return $
-                    extract (fr id $ EvoF (fst . sus) $ \_ ->
-                        Aw (\x -> go (cnt $ f x)))
-                    :< go . cnt . f
+                    UGStack
+                        (extract (fr id $ EvoF (fst . sus) $ \_ ->
+                            Aw (\x -> go (cnt $ f x))))
+                        (extract . go . cnt . f)
                 Yd (y, Event t) _ -> Yd y (pr t)
                 Yd (y, _) r -> Yd y (go . cnt $ r)
                 M mr -> M (go . cnt <$> mr)
