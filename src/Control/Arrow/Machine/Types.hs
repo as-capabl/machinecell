@@ -1264,38 +1264,27 @@ unsafeExhaust p = evolve $ makeEvo $ \_ fr0 ->
       in
         doCycle
 
-
 -- | Run a machine.
 runT ::
     (Monad m, Fd.Foldable f) =>
     (c -> m ()) ->
     ProcessT m (Event b) (Event c) ->
     f b -> m ()
-runT outpre pa0 l = Fd.foldr frF (term False) l (runProcessT pa0)
+runT outpre pa0 l0raw =
+    runEvo (finishWith pa0) frF (foldr ((:) . Event) [End] l0raw)
   where
-    frF _ _ (debone -> Return v) = absurd v
-    frF x next (debone -> evoF :>>= cnt) =
+    frF evoF l =
         case
             prepare evoF NoEvent
           of
-            Yd (Event y) p' -> outpre y >> frF x next (cnt p')
-            Yd NoEvent p' -> frF x next (cnt p')
-            Yd End p' -> term False (cnt p')
-            M mp' -> cnt <$> mp' >>= frF x next 
-            Aw fp' -> next (cnt $ fp' (Event x))
-
-    term _ (debone -> Return v) = absurd v
-    term b (debone -> evoF :>>= cnt) =
-        case
-            prepare evoF NoEvent
-          of
-            Yd (Event y) p' -> outpre y >> term False (cnt p')
-            Yd _ p' -> term b (cnt p') 
-            M mp' -> cnt <$> mp' >>= term b
-            Aw fp' -> if b
-                then return ()
-                else term True (cnt $ fp' End)
-
+            Yd (Event y) p' -> outpre y >> p' (case l of {[] -> [End]; _ -> l})
+            Yd NoEvent p' -> p' l
+            Yd End p' -> p' (case l of {[] -> []; _ -> [End]})
+            M mp' -> mp' >>= \p' -> p' l
+            Aw fp' -> case l
+              of
+                ev : rest -> fp' ev rest
+                [] -> return ()
 
 type Builder b = FT.F ((,) b)
 
