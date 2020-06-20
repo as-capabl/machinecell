@@ -136,13 +136,14 @@ import Control.Arrow
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Identity
-import Control.Monad.Skeleton
 import Control.Applicative
 import Control.Comonad
 import qualified Data.Foldable as Fd
 import Data.Traversable as Tv
 import Data.Semigroup (Semigroup ((<>)))
-import Control.Monad.Trans.Free.Church (FT ())
+import Control.Monad.Free (Free ())
+import qualified Control.Monad.Free as F
+import Control.Monad.Trans.Free.Church (FT (FT))
 import qualified Control.Monad.Trans.Free.Church as FT
 import Control.Monad.Free.Church (F ())
 import qualified Control.Monad.Free.Church as F
@@ -155,26 +156,18 @@ import Unsafe.Coerce
 
 import Control.Arrow.Machine.Internal.Event
 
-data EvoV_ i o m a =
+data EvoV i o m a =
     Aw (i -> a) |
     Yd o a |
     M (m a)
   deriving Functor
 
-type EvoV = EvoV_
-type EvoV_UG = EvoV_
-
-data EvoF' evoV i o m a = EvoF
+data EvoF i o m a = EvoF
   {
     suspend :: i -> o,
-    prepare :: i -> evoV i o (m :: * -> *) a  
+    prepare :: i -> EvoV i o (m :: * -> *) a
   }
   deriving Functor
-
--- type role EvoF' representational representational representational representational representational
-
-type EvoF = EvoF' EvoV
-type EvoF_UG = EvoF' EvoV_UG
 
 data UGStack i a = UGStack
   {
@@ -198,8 +191,8 @@ elimUG :: UGStack i a -> Maybe i -> a
 elimUG s Nothing = extract s
 elimUG s (Just x) = unGet s x
 
-ugSequence :: Functor f => f (UGStack i a) -> UGStack i (f a)
-ugSequence fux = makeUG $ \mu -> (elimUG `flip` mu) <$> fux
+ugDistrib :: Functor f => f (UGStack i a) -> UGStack i (f a)
+ugDistrib fux = makeUG $ \mu -> (elimUG `flip` mu) <$> fux
 
 newtype Evolution i o m r = Evolution
   {
@@ -219,11 +212,12 @@ newtype Evolution i o m r = Evolution
 
 {-# INLINE [0] runEvo #-}
 runEvo :: Monad m => Evolution i o m Void -> (EvoF i o m r -> r) -> r
-runEvo evo fr0 = extract (FT.runFT (runEvolution evo) absurd (\xr fx -> fr0 <$> ugSequence (xr <$> fx)))
+-- runEvo evo fr0 = extract (FT.runFT (runEvolution evo) absurd (\xr fx -> fr0 <$> ugDistrib (xr <$> fx)))
+runEvo evo fr0 = extract (FT.runFT (runEvolution evo) absurd (\xr fx -> ugPure . fr0 $ extract . xr <$> fx))
 
 {-# INLINE [0] makeEvo #-}
 makeEvo :: Monad m => (forall r. (a -> r) -> (EvoF i o m r -> r) -> r) -> Evolution i o m a
-makeEvo f = Evolution $ FT.FT $ \pr fr0 -> f pr (fr fr0)
+makeEvo f = Evolution $ FT $ \pr fr0 -> f pr (fr fr0)
   where
     fr fr0 evoF = makeUG $ \mu -> extract $ fr0 id $ EvoF (suspend evoF) $ \i -> case prepare evoF i
       of
@@ -234,14 +228,14 @@ makeEvo f = Evolution $ FT.FT $ \pr fr0 -> f pr (fr fr0)
         M mr -> M $ extend (elimUG `flip` mu) <$> mr
 
 aw_ :: (i -> o) -> (i -> a) -> Evolution i o m a
-aw_ sus f = Evolution $ FT.FT $ \pr fr ->
+aw_ sus f = Evolution $ FT $ \pr fr ->
     let
         r = fr pr (EvoF sus $ \_ -> Aw f)
       in
         UGStack (extract r) (extract . pr . f)
 
 yd_ :: (i -> o) -> o -> Evolution i o m ()
-yd_ sus x = Evolution $ FT.FT $ \pr fr ->
+yd_ sus x = Evolution $ FT $ \pr fr ->
     ugPure . extract $ fr pr (EvoF sus $ \_ -> Yd x ())
 
 instance
@@ -274,13 +268,13 @@ instance
 -- or arrow combinations of them.
 --
 -- See an introduction at "Control.Arrow.Machine" documentation.
-newtype ProcessT m i o = ProcessT { runProcessT :: Skeleton (EvoF i o m) Void }
+newtype ProcessT m i o = ProcessT { runProcessT :: Free (EvoF i o m) Void }
 
 unwrapP :: Functor m => ProcessT m i o -> EvoF i o m (ProcessT m i o)
-unwrapP pa = case debone (runProcessT pa)
+unwrapP pa = case runProcessT pa
   of
-    Return v -> absurd v
-    evoF :>>= cnt -> ProcessT <$> (cnt <$> evoF)
+    F.Pure v -> absurd v
+    F.Free evoF -> ProcessT <$> evoF
 
 {-# INLINE [1] compositeProc #-}
 compositeProc f g = evolve $ composeEvo (finishWith g) f
@@ -334,14 +328,16 @@ composeEvo q0 p0 = makeEvo $ \_ fr0 ->
 #-}
 {-# INLINE[0] evolve #-}
 evolve :: Monad m => Evolution i o m Void -> ProcessT m i o
-evolve evo = ProcessT $ runEvo evo (\fx -> boned (fx :>>= id))
+evolve evo = ProcessT $ runEvo evo F.wrap
 
 {-# INLINE[0] finishWith #-}
 finishWith :: Monad m => ProcessT m i o -> Evolution i o m a
-finishWith (ProcessT pa0) = makeEvo $ \pr fr -> deboneBy (go pr fr) pa0
-  where
-    go pr _ (Return x) = pr (absurd x)
-    go pr fr (fx :>>= xr) = fr (deboneBy (go pr fr) . xr <$> fx)
+finishWith (ProcessT pa0) = makeEvo $ \pr fr ->
+    let
+        go  (F.Pure x) = pr (absurd x)
+        go  (F.Free fx) = fr (go <$> fx)
+      in
+        go pa0
 
 
 
@@ -631,7 +627,7 @@ instance
     MonadAwait (Evolution (Event a) o m) a
   where
     {-# INLINE await #-}
-    await = Evolution $ FT.FT $ \pr fr ->
+    await = Evolution $ FT $ \pr fr ->
         let
             r = fr doAw (EvoF (const noEvent) $ \_ -> Aw id)
             doAw (Event x) = pr x
@@ -799,9 +795,9 @@ repeatedly = fit (return . runIdentity) . repeatedlyT
 -- Switches
 --
 switchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-switchAfter p0 = Evolution $ FT.FT $ \pr0 fr0 ->
+switchAfter p0 = Evolution $ FT $ \pr0 fr0 ->
     let
-        fr' pr fr xmr (EvoF sus prep) = ugSequence $ \mu -> fr id $ EvoF (fst . sus) $ \i ->
+        fr' pr fr xmr (EvoF sus prep) = ugDistrib $ \mu -> fr id $ EvoF (fst . sus) $ \i ->
             case prep i
               of
                 Aw f -> Aw $ \i -> ($ Just i) <$> xmr (f i)
@@ -812,7 +808,7 @@ switchAfter p0 = Evolution $ FT.FT $ \pr0 fr0 ->
         ($ Nothing) <$> FT.runFT (runEvolution (finishWith p0)) absurd (fr' pr0 fr0)
 
 dSwitchAfter :: Monad m => ProcessT m i (o, Event t) -> Evolution i o m t
-dSwitchAfter p0 = Evolution $ FT.FT $ \pr0 fr0 ->
+dSwitchAfter p0 = Evolution $ FT $ \pr0 fr0 ->
     let
         fr' pr fr xmr (EvoF sus prep) = fr id $ EvoF (fst . sus) $ \i ->
             case prep i
