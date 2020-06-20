@@ -227,16 +227,11 @@ makeEvo f = Evolution $ FT $ \pr fr0 -> f pr (fr fr0)
         Yd y r -> Yd y r
         M mr -> M $ extend (elimUG `flip` mu) <$> mr
 
-aw_ :: (i -> o) -> (i -> a) -> Evolution i o m a
-aw_ sus f = Evolution $ FT $ \pr fr ->
-    let
-        r = fr pr (EvoF sus $ \_ -> Aw f)
-      in
-        UGStack (extract r) (extract . pr . f)
+aw_ :: Monad m => (i -> o) -> (i -> a) -> Evolution i o m a
+aw_ sus f = makeEvo $ \pr fr -> fr (EvoF sus $ \_ -> Aw (pr . f))
 
-yd_ :: (i -> o) -> o -> Evolution i o m ()
-yd_ sus x = Evolution $ FT $ \pr fr ->
-    ugPure . extract $ fr pr (EvoF sus $ \_ -> Yd x ())
+yd_ :: Monad m => (i -> o) -> o -> Evolution i o m ()
+yd_ sus x = makeEvo $ \pr fr -> fr (EvoF sus $ \_ -> Yd x (pr ()))
 
 instance
     Functor (Evolution i o m)
@@ -298,29 +293,6 @@ composeEvo q0 p0 = makeEvo $ \_ fr0 ->
         go evoF p = fr0 (goF p evoF)
       in
         runEvo q0 go p0
-
-{- unsafeCoerce $
-    let
-        go :: (ProcessT m a b, Skeleton (EvoF b c m) Void) -> Skeleton (EvoF a c m) Void
-        go pq = boned $ goF pq :>>= go
-
-        goF (_, debone -> Return v) = absurd v
-        goF (p, q@(debone -> evoF :>>= cnt)) = EvoF (suspend evoF . suspend (unwrapP p)) $ \i ->
-            let
-                susX = suspend (unwrapP p) i
-                vQ = prepare evoF susX
-                vP = prepare (unwrapP p) i
-              in
-                EV $ case (vP, vQ)
-                  of
-                    (_, M mq') -> M $ (p,) . cnt <$> mq'
-                    (_, Yd o q') -> Yd o (p, cnt q')
-                    (M mp', Aw _) -> M $ (,q) <$> mp'
-                    (Yd z p', Aw g) -> prepare (goF (p', cnt $ g z)) i
-                    (Aw f, Aw _) -> Aw $ (,q) . f 
-      in
-        go (p0, resolveUG $ runEvolution q0)
--}
 
 {-# RULES
 "evolve/finishWith" forall p. evolve (finishWith p) = p
