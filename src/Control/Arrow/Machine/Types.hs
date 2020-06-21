@@ -634,8 +634,42 @@ instance
 
 catchP:: (Monad m, Occasional' o) =>
     Evolution i o m a -> Evolution i o m a -> Evolution i o m a
-catchP p recover = undefined {- Evolution $
-    let 
+catchP p0 recover0 =  Evolution $ FT $ \pr0 fr0 ->
+    let
+        fr' ::
+            (Monad m, Occasional' o) =>
+            Evolution i o m a ->
+            (a -> UGStack i r) ->
+            (forall x. (x -> UGStack i r) -> EvoF i o m x -> UGStack i r) ->
+            (forall x. (x -> UGStack i r) -> EvoF i o m x -> UGStack i r) ->
+            (x1 -> UGStack i (Maybe i -> r)) ->
+            EvoF i o m x1 ->
+            UGStack i (Maybe i -> r)
+        fr' recover prR frR fr xmr (EvoF sus prep) = ugDistrib $ \mu ->
+            fr id $ EvoF sus $ \i ->
+                case prep i
+                  of
+                    Aw f -> Aw $ \i -> ($ Just i) <$> xmr (f i)
+                    Yd (collapse -> End) _ ->
+                        M . return . extend (elimUG `flip` mu) $
+                        runRecover recover prR frR
+                    Yd y x -> Yd y $ ($ Nothing) <$> xmr x
+                    M mx -> M ((fmap ($mu) . xmr) <$> mx)
+        pr' pr x = const <$> pr x
+
+        runRecover ::
+            (Monad m, Occasional' o) =>
+            Evolution i o m a ->
+            (a -> UGStack i r) ->
+            (forall x. (x -> UGStack i r) -> EvoF i o m x -> UGStack i r) ->
+            UGStack i r
+        runRecover recover pr fr = FT.runFT (runEvolution recover) pr fr
+      in
+        ($ Nothing) <$>
+            FT.runFT (runEvolution p0) (pr' pr0) (fr' recover0 pr0 fr0 fr0)
+
+{- catchP p recover = undefined  Evolution $
+    let
         go (Just (debone -> Return x), _) = return x
         go (Just (debone -> pstep :>>= cnt), lastval) = boned $ goMV pstep lastval :>>= \(x, lv') -> go (cnt <$> x, lv') 
         go (Nothing, _) = runEvolution recover
